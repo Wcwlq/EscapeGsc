@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#080604" />
+    <meta name="description" content="恐怖少帅：随机迷宫里先找枪，再找刀，把刀插进铁笼的锁里，撑过 30 秒。" />
+    <title>恐怖少帅</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="game-shell" aria-label="恐怖少帅游戏">
+      <canvas id="game" width="960" height="540" aria-label="第一人称恐怖迷宫"></canvas>
+
+      <div class="noise" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+
+      <section id="menu" class="screen is-visible" aria-labelledby="game-title">
+        <div class="menu-card">
+          <p class="eyebrow">单人逃生</p>
+          <div class="menu-portrait">
+            <img src="assets/doubao-normal.png" alt="少帅" />
+          </div>
+          <h1 id="game-title">恐怖少帅</h1>
+          <p class="menu-copy">先找枪，再找刀。把刀插进铁笼的锁里——撑过 30 秒。</p>
+
+          <div class="sensitivity-row">
+            <span class="sens-label">镜头灵敏度</span>
+            <input id="sens-slider" type="range" min="0.3" max="2.5" step="0.05" value="1" />
+            <span id="sens-value" class="sens-value">1.00x</span>
+          </div>
+
+          <div class="difficulty-list" role="radiogroup" aria-label="难度选择">
+            <button class="difficulty-btn" data-difficulty="peace" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">和平模式</span>
+              <span class="diff-desc">少帅移速降低 · 提前 10 格感知</span>
+            </button>
+            <button class="difficulty-btn" data-difficulty="easy" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">简单模式</span>
+              <span class="diff-desc">正常移速 · 提前 6 格感知</span>
+            </button>
+            <button class="difficulty-btn" data-difficulty="hard" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">困难模式</span>
+              <span class="diff-desc">正常移速 · 提前 4 格感知</span>
+            </button>
+            <button class="difficulty-btn" data-difficulty="nightmare" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">噩梦模式</span>
+              <span class="diff-desc">全程没有视野 · 少帅远处出生</span>
+            </button>
+            <button class="difficulty-btn" data-difficulty="hell" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">地狱模式</span>
+              <span class="diff-desc">两个少帅 · 提前 5 格感知</span>
+            </button>
+          </div>
+
+          <div class="controls-hint" aria-label="操作说明">
+            <span><kbd>WASD</kbd> 移动</span>
+            <span><kbd>鼠标</kbd> 转向 / 瞄准</span>
+            <span><kbd>Shift</kbd> 奔跑</span>
+            <span><kbd>左键</kbd> 开枪</span>
+            <span><kbd>Q</kbd> 插刀</span>
+            <span><kbd>Tab</kbd> 地图</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="result" class="screen" aria-live="assertive">
+        <div class="result-card">
+          <div class="result-portrait" aria-hidden="true">
+            <img id="result-image" src="assets/doubao-normal.png" alt="" />
+          </div>
+          <p id="result-kicker" class="eyebrow">游戏结束</p>
+          <h2 id="result-title">他抓到你了</h2>
+          <p id="result-copy">黑暗里传来熟悉的笑声。</p>
+          <button id="restart-button" class="primary-button" type="button">再试一次</button>
+        </div>
+      </section>
+
+      <header id="hud" class="hud" aria-live="polite">
+        <div class="objective">
+          <span class="objective-label">当前目标</span>
+          <strong id="objective-text">先找到那把枪</strong>
+        </div>
+        <div id="status-badge" class="status-badge">
+          <span class="status-dot"></span>
+          <span id="status-text">少帅正在寻找你</span>
+        </div>
+      </header>
+
+      <div id="crosshair" class="crosshair" aria-hidden="true"></div>
+      <div id="message" class="message" aria-live="assertive"></div>
+
+      <div id="mobile-controls" class="mobile-controls" aria-label="触屏操作">
+        <div class="move-pad">
+          <button data-control="forward" aria-label="向前">▲</button>
+          <button data-control="left" aria-label="左移">◀</button>
+          <button data-control="backward" aria-label="向后">▼</button>
+          <button data-control="right" aria-label="右移">▶</button>
+        </div>
+        <div class="look-pad">
+          <button data-control="turnLeft" aria-label="向左转">↶</button>
+          <button data-control="run" class="run-button" aria-label="奔跑">跑</button>
+          <button data-control="turnRight" aria-label="向右转">↷</button>
+          <button data-control="fire" aria-label="开枪">🔫</button>
+          <button data-control="knife" aria-label="插刀">🗡</button>
+        </div>
+      </div>
+
+      <div id="loading-error" class="asset-error" role="alert" hidden>
+        少帅图片没有加载成功，请确认 assets 文件夹与网页文件放在一起。
+      </div>
+    </main>
+    <script src="game.js"></script>
+  </body>
+</html>
