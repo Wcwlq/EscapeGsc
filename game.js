@@ -24,10 +24,14 @@
 
   crosshair.style.display = "none";
 
-  const ammoBadge = document.createElement("div");
-  ammoBadge.id = "ammo-badge";
-  ammoBadge.textContent = "🔫 ∞";
-  document.getElementById("game-shell").appendChild(ammoBadge);
+  // 弹药显示元素
+  const ammoCounter = document.createElement("div");
+  ammoCounter.id = "ammo-counter";
+  ammoCounter.innerHTML = `
+    <div class="ammo-dots"></div>
+    <div class="ammo-text">0 / 10</div>
+  `;
+  document.getElementById("game-shell").appendChild(ammoCounter);
 
   // ============================ 常量 ============================
   const MAP_W = 21;
@@ -42,7 +46,14 @@
   const PITCH_LIMIT = 0.55;
   const LOCK_DURATION = 30;
   const VIEW_RADIUS = 7;
-  const MAX_ENEMY_SPEED = 4.0;
+
+  const MAX_ENEMY_SPEED = 5.5;
+  const MAX_ENEMY_SPEED_LOCKED = 18.0;
+
+  const MAX_DT = 0.016;
+  const MOVE_SUBSTEP = 0.12;
+
+  const ESCAPER_BASE_SPEED = MOVE_SPEED * 0.85;
 
   const AUTO_FIRE_DELAY = 0.5;
   const AUTO_FIRE_INTERVAL = 0.12;
@@ -57,15 +68,29 @@
   const CASING_LIFE = 4.5;
 
   const START_GRACE_DURATION = 5;
-
   const SOUND_RANGE = 8;
   const HIT_VOICE_BOOST_DECAY = 2.5;
 
-  const WALL_TEX_SIZE = 512;
+  const WALL_NEARBY_BURST = 1.4;
+  const WALL_NEARBY_BURST_DECAY = 1.4;
 
-  // 墙面惊吓
+  const PAN_SMOOTH_TIME = 0.06;
+  const PAN_GAIN = 1.4;
+
+  const WALL_TEX_SIZE = 512;
   const WALL_SCARE_MIN_INTERVAL = 1;
   const WALL_SCARE_MAX_INTERVAL = 4;
+
+  // 【新增】弹匣 / 换弹
+  const MAX_AMMO = 10;
+  const RELOAD_TIME = 1.5;
+  const DUD_CHANCE = 0.65;         // 换弹时触发哑弹的概率
+  const DUD_MIN_COUNT = 1;
+  const DUD_MAX_COUNT = 3;
+  const LAST_BULLET_STUN = 3.0;    // 最后一发造成的总眩晕（基础 1 + 额外 2）
+
+  // 【新增】击退距离减少
+  const KNOCKBACK_BASE = 2.5;      // 原来 4.2
 
   // ============================ 难度 ============================
   const DIFFICULTIES = {
@@ -76,6 +101,10 @@
     hell:      { label: "地狱模式", enemySpeedMult: 1.0,  detectRange: 5,  enemyCount: 2 }
   };
   let currentDifficulty = "easy";
+
+  // ============================ 角色 ============================
+  let currentRole = "escaper";
+  const escaperTrail = new Set();
 
   // ============================ 状态 ============================
   const player = { x: 1.5, y: 1.5, angle: 0, pitch: 0, walkPhase: 0 };
@@ -90,9 +119,8 @@
   let batSpawnTimer = 5 + Math.random() * 4;
   let skullSpawnTimer = 7 + Math.random() * 6;
 
-  // 【新增】墙面惊吓
-  const wallScares = new Map();  // key: "gx,gy" -> { life, maxLife, phase }
-  let wallScareTimer = WALL_SCARE_MIN_INTERVAL + Math.random() * 6;
+  const wallScares = new Map();
+  let wallScareTimer = WALL_SCARE_MIN_INTERVAL + Math.random() * 2;
 
   let flickerTimer = 8 + Math.random() * 8;
   let flickerActive = 0;
@@ -110,6 +138,19 @@
   let mapExpanded = false;
 
   let hitVoiceBoost = 0;
+  let wallNearbyBurst = 0;
+  let wallNearbyPan = 0;
+
+  let playerFrozenTimer = 0;
+  let escapeGraceTimer = 0;
+
+  let escaperVisitedGun = false;
+  let escaperVisitedKey = false;
+
+  // 【新增】弹匣系统
+  let magazine = [];
+  let isReloading = false;
+  let reloadTimer = 0;
 
   const casings = [];
 
@@ -154,19 +195,18 @@
   let nearbyPlayPending = false;
   let exploreAccum = 0;
 
-  // 墙面照片纹理（只在惊吓时用）
-  let wallTexture = null;
+  let wallTextureNormal = null;
+  let wallTextureEvil = null;
 
   const doubaoImage = new Image();
   doubaoImage.src = "assets/doubao.jpg";
   doubaoImage.addEventListener("error", () => { loadingError.hidden = false; });
+  doubaoImage.addEventListener("load", () => { buildWallTextures(); });
 
   const doubaoNormalImage = new Image();
   doubaoNormalImage.src = "assets/doubao-normal.png";
   doubaoNormalImage.addEventListener("error", () => {});
-  doubaoNormalImage.addEventListener("load", () => {
-    buildWallTexture();
-  });
+  doubaoNormalImage.addEventListener("load", () => { buildWallTextures(); });
 
   const voices = {
     victory: new Audio("assets/audio/victory.mp3"),
@@ -178,8 +218,8 @@
   voices.victory.loop = true;
   voices.caught.loop = true;
 
-  // ============================ 墙面照片纹理 ============================
-  function buildWallTexture() {
+  // ============================ 墙面纹理（两份） ============================
+  function buildTextureFrom(img) {
     const size = WALL_TEX_SIZE;
     const c = document.createElement("canvas");
     c.width = size;
@@ -189,12 +229,8 @@
     cx.fillStyle = "#1c1008";
     cx.fillRect(0, 0, size, size);
 
-    if (!doubaoNormalImage.complete || !doubaoNormalImage.naturalWidth) {
-      wallTexture = c;
-      return;
-    }
+    if (!img.complete || !img.naturalWidth) return c;
 
-    const img = doubaoNormalImage;
     const imgW = img.naturalWidth;
     const imgH = img.naturalHeight;
     const scale = Math.max(size / imgW, size / imgH);
@@ -204,12 +240,9 @@
     const dy = (size - dh) / 2;
 
     cx.drawImage(img, dx, dy, dw, dh);
-
-    // 叠一层暗红，让它更恐怖
     cx.fillStyle = "rgba(30, 6, 4, 0.35)";
     cx.fillRect(0, 0, size, size);
 
-    // 噪点
     for (let i = 0; i < 3200; i++) {
       const x = Math.random() * size;
       const y = Math.random() * size;
@@ -218,7 +251,21 @@
       cx.fillRect(x, y, 1, 1);
     }
 
-    wallTexture = c;
+    return c;
+  }
+
+  function buildWallTextures() {
+    if (doubaoNormalImage.complete && doubaoNormalImage.naturalWidth) {
+      wallTextureNormal = buildTextureFrom(doubaoNormalImage);
+    }
+    if (doubaoImage.complete && doubaoImage.naturalWidth) {
+      wallTextureEvil = buildTextureFrom(doubaoImage);
+    }
+  }
+
+  function activeWallTexture() {
+    if (currentRole === "marshal") return wallTextureEvil || wallTextureNormal;
+    return wallTextureNormal;
   }
 
   // ============================ 工具 ============================
@@ -226,6 +273,11 @@
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.35);
     canvas.width = Math.min(1100, Math.max(480, Math.round(window.innerWidth * pixelRatio)));
     canvas.height = Math.min(1000, Math.max(320, Math.round(window.innerHeight * pixelRatio)));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   function normalizeAngle(a) {
@@ -248,20 +300,159 @@
            !isWall(x + radius, y + radius);
   }
 
-  function movePlayer(dx, dy) {
-    const nx = player.x + dx;
-    const ny = player.y + dy;
-    if (canMoveTo(nx, player.y)) player.x = nx;
-    if (canMoveTo(player.x, ny)) player.y = ny;
+  // 【新增】少帅模式只能走青色轨迹区域
+  function canPlayerMoveTo(x, y, radius = 0.18) {
+    if (!canMoveTo(x, y, radius)) return false;
+    if (currentRole === "marshal") {
+      const gx = Math.floor(x);
+      const gy = Math.floor(y);
+      if (!escaperTrail.has(`${gx},${gy}`)) return false;
+    }
+    return true;
   }
 
-  function updateAmmoBadge() {
-    ammoBadge.textContent = "🔫 ∞";
-    ammoBadge.style.opacity = hasGun ? "1" : "0";
+  // 【新增】在少帅模式开局时为逃离者轨迹播种：
+  // 以 (cx, cy) 为中心，把半径 radius 内连通的可行走格子标记为“已走过”
+  function seedEscaperTrail(cx, cy, radius) {
+    const sgx = Math.floor(cx);
+    const sgy = Math.floor(cy);
+    if (sgx < 0 || sgx >= MAP_W || sgy < 0 || sgy >= MAP_H) return;
+    if (map[sgy]?.[sgx] !== 0) return;
+
+    escaperTrail.add(`${sgx},${sgy}`);
+    const seen = new Set([`${sgx},${sgy}`]);
+    const queue = [[sgx, sgy, 0]];
+    let head = 0;
+
+    while (head < queue.length) {
+      const [x, y, d] = queue[head++];
+      if (d >= radius) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        if (map[ny][nx] !== 0) continue;
+        const id = `${nx},${ny}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        escaperTrail.add(id);
+        queue.push([nx, ny, d + 1]);
+      }
+    }
+  }
+
+  function movePlayer(dx, dy) {
+    const maxDelta = Math.max(Math.abs(dx), Math.abs(dy));
+    const stepCount = Math.max(1, Math.ceil(maxDelta / MOVE_SUBSTEP));
+    const stepX = dx / stepCount;
+    const stepY = dy / stepCount;
+    for (let i = 0; i < stepCount; i++) {
+      const nx = player.x + stepX;
+      const ny = player.y + stepY;
+      if (canPlayerMoveTo(nx, player.y)) player.x = nx;
+      if (canPlayerMoveTo(player.x, ny)) player.y = ny;
+    }
+  }
+
+  function moveEntityWithSubsteps(entity, dx, dy, radius = 0.24) {
+    const maxDelta = Math.max(Math.abs(dx), Math.abs(dy));
+    if (maxDelta <= 0) return;
+    const stepCount = Math.max(1, Math.ceil(maxDelta / MOVE_SUBSTEP));
+    const stepX = dx / stepCount;
+    const stepY = dy / stepCount;
+    for (let i = 0; i < stepCount; i++) {
+      if (canMoveTo(entity.x + stepX, entity.y, radius)) entity.x += stepX;
+      if (canMoveTo(entity.x, entity.y + stepY, radius)) entity.y += stepY;
+    }
+  }
+
+  function findWalkableNear(cx, cy, radius = 0.16) {
+    if (canMoveTo(cx, cy, radius)) return { x: cx, y: cy };
+    for (let r = 0.15; r < 3; r += 0.15) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+        const nx = cx + Math.cos(a) * r;
+        const ny = cy + Math.sin(a) * r;
+        if (canMoveTo(nx, ny, radius)) return { x: nx, y: ny };
+      }
+    }
+    return { x: cx, y: cy };
+  }
+
+  // 【改动】弹药 UI 显示：子弹圆点 + 数字
+  function updateAmmoUI() {
+    if (currentRole === "marshal" || !hasGun) {
+      ammoCounter.classList.remove("is-visible");
+      return;
+    }
+    ammoCounter.classList.add("is-visible");
+
+    const dotsEl = ammoCounter.querySelector(".ammo-dots");
+    const textEl = ammoCounter.querySelector(".ammo-text");
+
+    const cur = magazine.length;
+    let html = "";
+    for (let i = 0; i < MAX_AMMO; i++) {
+      const filled = i < cur;
+      const cls = filled ? "ammo-dot" : "ammo-dot empty";
+      html += `<span class="${cls}"></span>`;
+    }
+    dotsEl.innerHTML = html;
+
+    if (isReloading) {
+      textEl.classList.add("reloading");
+      textEl.textContent = `换弹中… ${(reloadTimer).toFixed(1)}s`;
+      for (const dot of dotsEl.children) dot.classList.add("reloading");
+    } else {
+      textEl.classList.remove("reloading");
+      textEl.textContent = `${cur} / ${MAX_AMMO}`;
+    }
   }
 
   function getFov() { return BASE_FOV; }
   function currentPreset() { return DIFFICULTIES[currentDifficulty]; }
+
+  // ============================ 弹匣系统 ============================
+  function generateMagazine() {
+    const mag = new Array(MAX_AMMO).fill(true);
+    // 概率触发哑弹
+    if (Math.random() < DUD_CHANCE) {
+      const count = DUD_MIN_COUNT + Math.floor(Math.random() * (DUD_MAX_COUNT - DUD_MIN_COUNT + 1));
+      // 随机位置设为哑弹
+      const indices = new Set();
+      while (indices.size < count && indices.size < MAX_AMMO) {
+        indices.add(Math.floor(Math.random() * MAX_AMMO));
+      }
+      for (const i of indices) mag[i] = false;
+    }
+    return mag;
+  }
+
+  function startReload() {
+    if (state !== "playing") return;
+    if (currentRole !== "escaper") return;
+    if (!hasGun) return;
+    if (isReloading) return;
+    if (magazine.length >= MAX_AMMO) return;  // 弹匣已满
+    isReloading = true;
+    reloadTimer = RELOAD_TIME;
+    triggerHeld = false;
+    autoFiring = false;
+    playReloadSound();
+    updateAmmoUI();
+  }
+
+  function updateReload(dt) {
+    if (!isReloading) return;
+    reloadTimer -= dt;
+    if (reloadTimer <= 0) {
+      isReloading = false;
+      reloadTimer = 0;
+      magazine = generateMagazine();
+      updateAmmoUI();
+      playTone(440, 0.06, "square", 0.05);
+    } else {
+      updateAmmoUI();
+    }
+  }
 
   // ============================ 地图生成 ============================
   function bfsDistances(grid, sx, sy) {
@@ -276,6 +467,29 @@
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
         if (grid[ny][nx] !== 0) continue;
+        if (dist[ny][nx] !== -1) continue;
+        dist[ny][nx] = dist[y][x] + 1;
+        q.push([nx, ny]);
+      }
+    }
+    return dist;
+  }
+
+  function computeBFSFrom(sx, sy) {
+    const gx = Math.floor(sx);
+    const gy = Math.floor(sy);
+    const dist = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(-1));
+    if (gx < 0 || gx >= MAP_W || gy < 0 || gy >= MAP_H) return dist;
+    if (map[gy][gx] !== 0) return dist;
+    const q = [[gx, gy]];
+    dist[gy][gx] = 0;
+    let head = 0;
+    while (head < q.length) {
+      const [x, y] = q[head++];
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        if (map[ny][nx] !== 0) continue;
         if (dist[ny][nx] !== -1) continue;
         dist[ny][nx] = dist[y][x] + 1;
         q.push([nx, ny]);
@@ -385,9 +599,7 @@
     if (audio.state === "suspended") audio.resume();
 
     if (window.location.protocol === "file:") {
-      for (const clip of Object.values(voices)) {
-        clip.volume = 1.0;
-      }
+      for (const clip of Object.values(voices)) clip.volume = 1.0;
       return;
     }
 
@@ -397,7 +609,15 @@
           const src = audio.createMediaElementSource(clip);
           const gain = audio.createGain();
           gain.gain.value = 2.4;
-          src.connect(gain).connect(audio.destination);
+
+          const panner = audio.createStereoPanner ? audio.createStereoPanner() : null;
+          if (panner) {
+            panner.pan.value = 0;
+            src.connect(gain).connect(panner).connect(audio.destination);
+            clip._panner = panner;
+          } else {
+            src.connect(gain).connect(audio.destination);
+          }
           clip._boosted = true;
         } catch (e) {}
       }
@@ -433,24 +653,44 @@
       clip.currentTime = 0;
       clip.volume = 1.0;
       const p = clip.play();
-      if (p && p.catch) p.catch(() => {
-        playTone(82, 0.45, "sawtooth", 0.04);
-      });
+      if (p && p.catch) p.catch(() => playTone(82, 0.45, "sawtooth", 0.04));
     } catch (e) {}
   }
 
-  function updateNearbyVoice(distance) {
+  function worldDirectionToPan(targetX, targetY) {
+    const dx = targetX - player.x;
+    const dy = targetY - player.y;
+    const rel = normalizeAngle(Math.atan2(dy, dx) - player.angle);
+    let pan = Math.sin(rel) * PAN_GAIN;
+    if (pan > 1) pan = 1;
+    if (pan < -1) pan = -1;
+    return pan;
+  }
+
+  function updateNearbyVoice(distance, enemyX, enemyY) {
     const audible = SOUND_RANGE;
     if (state !== "playing" || distance >= audible) {
-      if (hitVoiceBoost <= 0.01) {
+      if (hitVoiceBoost <= 0.01 && wallNearbyBurst <= 0.01) {
         stopNearbyVoice();
         return;
       }
     }
     const proximity = Math.max(0, Math.min(1, (audible - distance) / Math.max(0.45, audible - 0.45)));
     let vol = 0.10 + Math.pow(proximity, 1.55) * 0.90;
-    vol = Math.min(1.0, vol + hitVoiceBoost);
+    vol = Math.min(1.0, vol + hitVoiceBoost + wallNearbyBurst);
     voices.nearby.volume = vol;
+
+    let pan = 0;
+    if (wallNearbyBurst > 0.01) {
+      pan = wallNearbyPan;
+    } else if (enemyX !== undefined && enemyY !== undefined) {
+      pan = worldDirectionToPan(enemyX, enemyY);
+    }
+
+    const panner = voices.nearby._panner;
+    if (panner && audio) {
+      panner.pan.setTargetAtTime(pan, audio.currentTime, PAN_SMOOTH_TIME);
+    }
 
     if (voices.nearby.paused && !nearbyPlayPending) {
       nearbyPlayPending = true;
@@ -625,6 +865,63 @@
     osc.start(t); osc.stop(t + 0.16);
   }
 
+  // 【新增】换弹音效：咔嗒 + 弹匣拔出 + 弹匣插入 + 咔嗒
+  function playReloadSound() {
+    if (!audio) return;
+    const t = audio.currentTime;
+
+    // 1. 弹匣释放咔嗒
+    {
+      const src = audio.createBufferSource();
+      src.buffer = makeNoiseBuffer(0.04, p => Math.pow(1 - p, 3));
+      const hp = audio.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 2200;
+      const g = audio.createGain();
+      g.gain.setValueAtTime(0.16, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+      src.connect(hp).connect(g).connect(audio.destination);
+      src.start(t); src.stop(t + 0.06);
+    }
+    // 2. 弹匣拔出的金属摩擦
+    {
+      const src = audio.createBufferSource();
+      src.buffer = makeNoiseBuffer(0.28, p => Math.sin(Math.PI * p));
+      const bp = audio.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 800; bp.Q.value = 3;
+      const g = audio.createGain();
+      g.gain.setValueAtTime(0.001, t + 0.08);
+      g.gain.linearRampToValueAtTime(0.11, t + 0.18);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
+      src.connect(bp).connect(g).connect(audio.destination);
+      src.start(t + 0.08); src.stop(t + 0.4);
+    }
+    // 3. 弹匣插入
+    {
+      const src = audio.createBufferSource();
+      src.buffer = makeNoiseBuffer(0.3, p => Math.sin(Math.PI * p));
+      const bp = audio.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 600; bp.Q.value = 4;
+      const g = audio.createGain();
+      g.gain.setValueAtTime(0.001, t + 0.85);
+      g.gain.linearRampToValueAtTime(0.13, t + 1.0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+      src.connect(bp).connect(g).connect(audio.destination);
+      src.start(t + 0.85); src.stop(t + 1.25);
+    }
+    // 4. 弹匣锁定咔嗒
+    {
+      const src = audio.createBufferSource();
+      src.buffer = makeNoiseBuffer(0.045, p => Math.pow(1 - p, 4));
+      const hp = audio.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 1800;
+      const g = audio.createGain();
+      g.gain.setValueAtTime(0.19, t + 1.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.33);
+      src.connect(hp).connect(g).connect(audio.destination);
+      src.start(t + 1.25); src.stop(t + 1.35);
+    }
+  }
+
   function startAmbientAudio() {
     if (!audio || ambientNodes) return;
     const windLen = Math.floor(audio.sampleRate * 4);
@@ -691,45 +988,25 @@
     src.start(t); src.stop(t + len + 0.05);
   }
 
-  // 墙面惊吓播放的刺耳尖啸
-  function playWallScream() {
-    if (!audio) return;
-    const t = audio.currentTime;
-
-    // 低频下坠
-    const osc = audio.createOscillator();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(520, t);
-    osc.frequency.exponentialRampToValueAtTime(90, t + 0.7);
-    const g = audio.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(0.09, t + 0.04);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
-    osc.connect(g).connect(audio.destination);
-    osc.start(t); osc.stop(t + 0.78);
-
-    // 高频尖啸
-    const osc2 = audio.createOscillator();
-    osc2.type = "square";
-    osc2.frequency.setValueAtTime(2200, t);
-    osc2.frequency.exponentialRampToValueAtTime(900, t + 0.5);
-    const g2 = audio.createGain();
-    g2.gain.setValueAtTime(0.0001, t);
-    g2.gain.linearRampToValueAtTime(0.05, t + 0.02);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
-    osc2.connect(g2).connect(audio.destination);
-    osc2.start(t); osc2.stop(t + 0.58);
-
-    // 噪声
-    const src = audio.createBufferSource();
-    src.buffer = makeNoiseBuffer(0.7, p => Math.exp(-p * 4));
-    const hp = audio.createBiquadFilter();
-    hp.type = "highpass"; hp.frequency.value = 800;
-    const g3 = audio.createGain();
-    g3.gain.setValueAtTime(0.12, t);
-    g3.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
-    src.connect(hp).connect(g3).connect(audio.destination);
-    src.start(t); src.stop(t + 0.72);
+  function playWallNearby(panX, panY) {
+    wallNearbyBurst = WALL_NEARBY_BURST;
+    if (panX !== undefined && panY !== undefined) {
+      wallNearbyPan = worldDirectionToPan(panX, panY);
+    } else {
+      wallNearbyPan = 0;
+    }
+    try {
+      voices.nearby.currentTime = 0;
+      voices.nearby.volume = Math.min(1.0, 0.10 + wallNearbyBurst);
+      const panner = voices.nearby._panner;
+      if (panner && audio) {
+        panner.pan.setTargetAtTime(wallNearbyPan, audio.currentTime, PAN_SMOOTH_TIME);
+      }
+      if (voices.nearby.paused && !nearbyPlayPending) {
+        nearbyPlayPending = true;
+        voices.nearby.play().catch(() => {}).finally(() => { nearbyPlayPending = false; });
+      }
+    } catch (e) {}
   }
 
   // ============================ 敌人对象 ============================
@@ -740,7 +1017,10 @@
       activeTimer: 1.3 + extraDelay,
       stunTimer: 0,
       rageLevel: 0,
-      wanderTarget: null
+      wanderTarget: null,
+      aiType: "shaoshuai",
+      lastX: x, lastY: y,
+      stuckTimer: 0
     };
   }
 
@@ -807,12 +1087,10 @@
     }
   }
 
-    // 【改动】触发一次墙面惊吓
   function spawnWallScare() {
     const cands = [];
     const px = Math.floor(player.x);
     const py = Math.floor(player.y);
-    // 搜索范围放大到 16 格
     const R = 16;
     const fov = getFov();
     for (let y = py - R; y <= py + R; y++) {
@@ -820,7 +1098,6 @@
         if (y < 0 || y >= MAP_H || x < 0 || x >= MAP_W) continue;
         if (map[y][x] !== 1) continue;
 
-        // 至少一面朝向可通行区域
         const adjacent = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
           const nx = x + dx, ny = y + dy;
           return nx >= 0 && nx < MAP_W && ny >= 0 && ny < MAP_H && map[ny][nx] === 0;
@@ -829,30 +1106,24 @@
 
         const wx = x + 0.5, wy = y + 0.5;
         const d = Math.hypot(wx - player.x, wy - player.y);
-        // 放宽距离：0.8 ~ 16
         if (d < 0.8 || d > R) continue;
 
-        // 放宽角度：视野 ±FOV*1.4（允许在视野边缘外一点）
         const rel = Math.abs(normalizeAngle(Math.atan2(wy - player.y, wx - player.x) - player.angle));
         if (rel > fov * 1.4) continue;
 
-        // 视线遮挡不作硬性要求，被挡住的也可以当作“隐约闪烁”
         cands.push({ x, y, dist: d });
       }
     }
     if (!cands.length) return;
 
-    // 【改动】面数从 2~4 提到 6~12
     const count = 6 + Math.floor(Math.random() * 7);
-    // 【改动】持续时长 1.2~2.2 秒
     const life = 1.2 + Math.random() * 1.0;
 
-    // 优先选近处的墙，让玩家更容易看到
     cands.sort((a, b) => a.dist - b.dist);
-    // 从最近的一半里随机抽取
     const poolSize = Math.max(count, Math.floor(cands.length * 0.6));
     const pool = cands.slice(0, poolSize);
 
+    let sumX = 0, sumY = 0, cnt = 0;
     for (let i = 0; i < count && pool.length; i++) {
       const idx = Math.floor(Math.random() * pool.length);
       const c = pool.splice(idx, 1)[0];
@@ -861,15 +1132,38 @@
         maxLife: life,
         phase: Math.random() * Math.PI * 2
       });
+      sumX += c.x + 0.5;
+      sumY += c.y + 0.5;
+      cnt++;
     }
-
-    // 音效：尖啸 + 低语
-    playWallScream();
-    if (Math.random() < 0.7) playWhisper();
+    if (cnt > 0) {
+      playWallNearby(sumX / cnt, sumY / cnt);
+    } else {
+      playWallNearby();
+    }
+    if (Math.random() < 0.5) playWhisper();
     shake = Math.max(shake, 1.1);
   }
 
+  function updateWallScares(dt) {
+    if (state !== "playing") return;
+
+    for (const [key, s] of wallScares) {
+      s.life -= dt;
+      if (s.life <= 0) wallScares.delete(key);
+    }
+
+    wallScareTimer -= dt;
+    if (wallScareTimer <= 0) {
+      wallScareTimer = WALL_SCARE_MIN_INTERVAL +
+        Math.random() * (WALL_SCARE_MAX_INTERVAL - WALL_SCARE_MIN_INTERVAL);
+      spawnWallScare();
+    }
+  }
+
   function updateScares(dt) {
+    wallNearbyBurst = Math.max(0, wallNearbyBurst - dt * WALL_NEARBY_BURST_DECAY);
+
     batSpawnTimer -= dt;
     if (batSpawnTimer <= 0) {
       if (bats.length < 4) spawnBat();
@@ -903,10 +1197,18 @@
       } else if (b.state === "flying") {
         b.phase += dt * 26;
         b.flyTime += dt;
-        const nx = b.x + b.vx * dt;
-        const ny = b.y + b.vy * dt;
-        if (!isWall(nx, b.y)) b.x = nx; else b.vx = -b.vx;
-        if (!isWall(b.x, ny)) b.y = ny; else b.vy = -b.vy;
+        const dx = b.vx * dt;
+        const dy = b.vy * dt;
+        const maxDelta = Math.max(Math.abs(dx), Math.abs(dy));
+        const stepCount = Math.max(1, Math.ceil(maxDelta / MOVE_SUBSTEP));
+        const stepX = dx / stepCount;
+        const stepY = dy / stepCount;
+        for (let s = 0; s < stepCount; s++) {
+          const nx = b.x + stepX;
+          const ny = b.y + stepY;
+          if (!isWall(nx, b.y)) b.x = nx; else { b.vx = -b.vx; break; }
+          if (!isWall(b.x, ny)) b.y = ny; else { b.vy = -b.vy; break; }
+        }
         b.z += b.vz * dt;
         if (b.flyTime > 1.5 || b.z > 3.2) b.state = "escaping";
       } else {
@@ -948,20 +1250,14 @@
       if (ghostActive <= 0) ghostTimer = 14 + Math.random() * 12;
     } else {
       ghostTimer -= dt;
-      if (ghostTimer <= 0) {
-        spawnGhost();
-        ghostTimer = 9999;
-      }
+      if (ghostTimer <= 0) { spawnGhost(); ghostTimer = 9999; }
     }
 
     updateWallScares(dt);
 
     if (state === "playing" && audio) {
       ambientCreakTimer -= dt;
-      if (ambientCreakTimer <= 0) {
-        playCreak();
-        ambientCreakTimer = 6 + Math.random() * 10;
-      }
+      if (ambientCreakTimer <= 0) { playCreak(); ambientCreakTimer = 6 + Math.random() * 10; }
       ambientWhisperTimer -= dt;
       if (ambientWhisperTimer <= 0) {
         if (Math.random() < 0.7) playWhisper();
@@ -992,19 +1288,48 @@
     const preset = currentPreset();
     enemies = [];
 
-    if (currentDifficulty === "hell") {
-      enemies.push(createEnemy(level.enemyCell.x + 0.5, level.enemyCell.y + 0.5, 0));
-      enemies.push(createEnemy(level.enemyCell2.x + 0.5, level.enemyCell2.y + 0.5, 0));
+    escaperTrail.clear();
+    playerFrozenTimer = 0;
+    escapeGraceTimer = 0;
+    wallNearbyBurst = 0;
+    wallNearbyPan = 0;
+    escaperVisitedGun = false;
+    escaperVisitedKey = false;
+
+    // 【新增】重置弹匣系统
+    magazine = [];
+    isReloading = false;
+    reloadTimer = 0;
+
+    if (currentRole === "marshal") {
+      const spawn = findWalkableNear(player.x + 0.7, player.y + 0.7, 0.16);
+      const e = createEnemy(spawn.x, spawn.y, 0);
+      e.aiType = "escaper";
+      enemies.push(e);
       graceTimer = 0;
-    } else if (currentDifficulty === "nightmare") {
-      enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
-      graceTimer = START_GRACE_DURATION;
+      playerFrozenTimer = START_GRACE_DURATION;
+      escapeGraceTimer = 1.0;
+
+      // 【新增】播种轨迹：
+      // 1) 以逃离者出生点为圆心、半径 2 的连通区域（保证少帅开局能挪动）
+      // 2) 少帅自己脚下的格子（防止极端地图下少帅出生在合法区域之外）
+      seedEscaperTrail(e.x, e.y, 2);
+      seedEscaperTrail(player.x, player.y, 1);
     } else {
-      enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
-      if (preset.enemyCount >= 2) {
-        enemies.push(createEnemy(player.x - 0.08, player.y - 0.08, 0));
+      if (currentDifficulty === "hell") {
+        enemies.push(createEnemy(level.enemyCell.x + 0.5, level.enemyCell.y + 0.5, 0));
+        enemies.push(createEnemy(level.enemyCell2.x + 0.5, level.enemyCell2.y + 0.5, 0));
+        graceTimer = 0;
+      } else if (currentDifficulty === "nightmare") {
+        enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
+        graceTimer = START_GRACE_DURATION;
+      } else {
+        enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
+        if (preset.enemyCount >= 2) {
+          enemies.push(createEnemy(player.x - 0.08, player.y - 0.08, 0));
+        }
+        graceTimer = START_GRACE_DURATION;
       }
-      graceTimer = START_GRACE_DURATION;
     }
 
     explored = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(false));
@@ -1028,9 +1353,8 @@
     batSpawnTimer = 5 + Math.random() * 4;
     skullSpawnTimer = 7 + Math.random() * 6;
 
-    // 【新增】重置墙面惊吓
     wallScares.clear();
-    wallScareTimer = WALL_SCARE_MIN_INTERVAL + Math.random() * 6;
+    wallScareTimer = 0.6 + Math.random() * 1.0;
 
     flickerTimer = 8 + Math.random() * 8;
     flickerActive = 0;
@@ -1053,11 +1377,16 @@
     doorOpened = false;
     shake = 0;
 
-    objectiveText.textContent = "先找到那把枪";
-    statusText.textContent = "少帅正在寻找你";
+    if (currentRole === "marshal") {
+      objectiveText.textContent = "抓住逃离者！";
+      statusText.textContent = `冻结 ${START_GRACE_DURATION}s · 逃离者正在逃跑`;
+    } else {
+      objectiveText.textContent = "先找到那把枪";
+      statusText.textContent = "少帅正在寻找你";
+    }
     statusBadge.classList.remove("danger");
     statusBadge.classList.remove("rage");
-    updateAmmoBadge();
+    updateAmmoUI();
     hideMessage();
     markExploredAroundPlayer();
   }
@@ -1076,7 +1405,9 @@
     if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
       canvas.requestPointerLock?.();
     }
-    if (currentDifficulty === "hell") {
+    if (currentRole === "marshal") {
+      showMessage(`少帅模式 · 5 秒后开始追，别让他跑掉！`, 3400);
+    } else if (currentDifficulty === "hell") {
       showMessage(`地狱模式 · 两个少帅正在远处逼近`, 3400);
     } else if (currentDifficulty === "nightmare") {
       showMessage(`噩梦模式 · 先找枪，再找刀`, 2800);
@@ -1090,17 +1421,30 @@
     hud.classList.remove("is-visible");
     crosshair.classList.remove("is-visible");
     mobileControls.classList.remove("is-visible");
-    ammoBadge.style.opacity = "0";
+    ammoCounter.classList.remove("is-visible");
     triggerHeld = false;
     autoFiring = false;
+    isReloading = false;
     document.exitPointerLock?.();
-    resultKicker.textContent = won ? "你赢了" : "游戏结束";
-    resultTitle.textContent = won ? "天亮之前" : "他抓到你了";
-    resultCopy.textContent = won
-      ? "你钻进铁笼，反手锁上。少帅在栏杆外站了一整夜。"
-      : "黑暗里传来熟悉的笑声。下一次，别让他靠得太近。";
-    resultImage.src = won ? "assets/doubao-normal.png" : "assets/doubao.jpg";
-    resultImage.alt = won ? "正常的少帅" : "恐怖的少帅";
+
+    if (currentRole === "marshal") {
+      resultKicker.textContent = won ? "抓住了" : "逃脱了";
+      resultTitle.textContent = won ? "今晚，你赢了" : "他跑了";
+      resultCopy.textContent = won
+        ? "逃离者被你按在墙角。今晚，他属于你了。"
+        : "逃离者钻进铁笼，反手锁上。栏杆外你站了一整夜。";
+      resultImage.src = won ? "assets/doubao.jpg" : "assets/doubao-normal.png";
+      resultImage.alt = won ? "恐怖的少帅" : "正常的少帅";
+    } else {
+      resultKicker.textContent = won ? "你赢了" : "游戏结束";
+      resultTitle.textContent = won ? "天亮之前" : "他抓到你了";
+      resultCopy.textContent = won
+        ? "你钻进铁笼，反手锁上。少帅在栏杆外站了一整夜。"
+        : "黑暗里传来熟悉的笑声。下一次，别让他靠得太近。";
+      resultImage.src = won ? "assets/doubao-normal.png" : "assets/doubao.jpg";
+      resultImage.alt = won ? "正常的少帅" : "恐怖的少帅";
+    }
+
     result.classList.toggle("is-win", won);
     result.classList.toggle("is-loss", !won);
     result.classList.add("is-visible");
@@ -1179,6 +1523,8 @@
 
   // ============================ 探索 ============================
   function markExploredAroundPlayer() {
+    if (currentRole === "marshal") return;
+
     const px = player.x, py = player.y;
     const R = VIEW_RADIUS;
     const minX = Math.max(0, Math.floor(px - R));
@@ -1196,6 +1542,7 @@
   }
 
   function updateExploration(dt) {
+    if (currentRole === "marshal") return;
     exploreAccum += dt;
     if (exploreAccum < 0.09) return;
     exploreAccum = 0;
@@ -1213,7 +1560,7 @@
   function releaseTrigger() {
     if (!triggerHeld) return;
     const held = (performance.now() - triggerHeldSince) / 1000;
-    if (held < AUTO_FIRE_DELAY && !autoFiring && state === "playing" && hasGun) {
+    if (held < AUTO_FIRE_DELAY && !autoFiring && state === "playing" && hasGun && currentRole === "escaper") {
       fireGun(false);
     }
     triggerHeld = false;
@@ -1222,56 +1569,82 @@
 
   function fireGun(isAuto = false) {
     if (state !== "playing" || !hasGun) return false;
+    if (currentRole !== "escaper") return false;
+    if (isReloading) return false;              // 换弹中不能开枪
     if (gunCooldown > 0) return false;
+    if (magazine.length === 0) {
+      // 空弹匣：咔嗒声
+      playTone(180, 0.05, "square", 0.04);
+      return false;
+    }
 
     gunCooldown = isAuto ? (AUTO_FIRE_INTERVAL * 0.9) : SINGLE_FIRE_COOLDOWN;
 
+    // 判断最后一发
+    const isLastBullet = (magazine.length === 1);
+
+    // 弹出当前子弹，判断是正常还是哑弹
+    const isLive = magazine.pop();
+    updateAmmoUI();
+
     const recoil = isAuto ? RECOIL_AUTO : RECOIL_BASE;
-    muzzleFlash = 1;
     gunKick = recoil;
     viewKick = recoil;
     shake = Math.max(shake, 2.6 * recoil);
-    player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - 0.022 * recoil));
 
-    playGunshot(isAuto);
-    playBulletWhoosh(isAuto ? 0.25 : 0.15);
+    if (isLive) {
+      // 正常子弹：枪口闪光 + 音效 + 命中
+      muzzleFlash = 1;
+      player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - 0.022 * recoil));
 
-    const cx = player.x + Math.cos(player.angle) * 0.25 + Math.cos(player.angle + Math.PI / 2) * 0.15;
-    const cy = player.y + Math.sin(player.angle) * 0.25 + Math.sin(player.angle + Math.PI / 2) * 0.15;
-    const sideAng = player.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.8;
-    casings.push({
-      x: cx, y: cy, z: 0.55,
-      vx: Math.cos(sideAng) * (1.4 + Math.random() * 0.8),
-      vy: Math.sin(sideAng) * (1.4 + Math.random() * 0.8),
-      vz: 1.8 + Math.random() * 0.6,
-      rot: Math.random() * Math.PI,
-      vrot: (Math.random() - 0.5) * 14,
-      life: CASING_LIFE,
-      grounded: false
-    });
+      playGunshot(isAuto);
+      playBulletWhoosh(isAuto ? 0.25 : 0.15);
 
-    let best = null, bestDist = Infinity;
-    for (const e of enemies) {
-      const dx = e.x - player.x, dy = e.y - player.y;
-      const d = Math.hypot(dx, dy);
-      if (d < 0.001 || d > 16) continue;
-      const rel = Math.abs(normalizeAngle(Math.atan2(dy, dx) - player.angle));
-      const tol = Math.atan2(0.60, Math.max(d, 0.5));
-      if (rel < tol && hasLineOfSight(player.x, player.y, e.x, e.y)) {
-        if (d < bestDist) { bestDist = d; best = e; }
+      const cx = player.x + Math.cos(player.angle) * 0.25 + Math.cos(player.angle + Math.PI / 2) * 0.15;
+      const cy = player.y + Math.sin(player.angle) * 0.25 + Math.sin(player.angle + Math.PI / 2) * 0.15;
+      const sideAng = player.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.8;
+      casings.push({
+        x: cx, y: cy, z: 0.55,
+        vx: Math.cos(sideAng) * (1.4 + Math.random() * 0.8),
+        vy: Math.sin(sideAng) * (1.4 + Math.random() * 0.8),
+        vz: 1.8 + Math.random() * 0.6,
+        rot: Math.random() * Math.PI,
+        vrot: (Math.random() - 0.5) * 14,
+        life: CASING_LIFE,
+        grounded: false
+      });
+
+      let best = null, bestDist = Infinity;
+      for (const e of enemies) {
+        const dx = e.x - player.x, dy = e.y - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.001 || d > 16) continue;
+        const rel = Math.abs(normalizeAngle(Math.atan2(dy, dx) - player.angle));
+        const tol = Math.atan2(0.60, Math.max(d, 0.5));
+        if (rel < tol && hasLineOfSight(player.x, player.y, e.x, e.y)) {
+          if (d < bestDist) { bestDist = d; best = e; }
+        }
       }
+      if (best) {
+        const dx = best.x - player.x, dy = best.y - player.y;
+        const d = Math.hypot(dx, dy);
+        hitEnemy(best, dx / d, dy / d, isAuto, isLastBullet);
+      }
+    } else {
+      // 哑弹：没有闪光、没有枪声，只有后坐力和闷响
+      shake = Math.max(shake, 2.4);
+      player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - 0.014));
+      playTone(120, 0.05, "square", 0.05);
+      // 哑弹不发射子弹，没有命中判定
     }
-    if (best) {
-      const dx = best.x - player.x, dy = best.y - player.y;
-      const d = Math.hypot(dx, dy);
-      hitEnemy(best, dx / d, dy / d, isAuto);
-    }
+
     return true;
   }
 
-  function hitEnemy(e, ux, uy, isAuto) {
+  function hitEnemy(e, ux, uy, isAuto, isLastBullet) {
     const recoil = isAuto ? RECOIL_AUTO : RECOIL_BASE;
-    const knockback = 4.2 * recoil;
+    // 【改动】击退距离减少
+    const knockback = KNOCKBACK_BASE * recoil;
     const steps = Math.max(20, Math.floor(24 * recoil));
     for (let i = 0; i < steps; i++) {
       const sx = (ux * knockback) / steps;
@@ -1280,8 +1653,18 @@
       if (canMoveTo(e.x, e.y + sy, 0.24)) e.y += sy;
     }
     e.path = []; e.repathTimer = 0.5;
-    e.stunTimer = 1.0;
+
+    // 【改动】最后一发额外造成 2 秒眩晕
+    if (isLastBullet) {
+      e.stunTimer = Math.max(e.stunTimer, LAST_BULLET_STUN);
+      showMessage(`最后一发！少帅眩晕 ${LAST_BULLET_STUN.toFixed(1)}s`, 1400);
+    } else {
+      e.stunTimer = Math.max(e.stunTimer, 1.0);
+    }
+
     e.rageLevel += 1;
+    e.visibleMemory = Math.max(e.visibleMemory, 3.2);
+    e.appearanceTimer = Math.max(e.appearanceTimer, 9.5);
 
     spawnBlood(e.x, e.y, ux, uy);
 
@@ -1306,10 +1689,12 @@
       }
     } catch (err) {}
 
-    if (e.rageLevel >= 8) {
-      showMessage(`少帅已经疯了！狂暴 Lv.${e.rageLevel}`, 1300);
-    } else {
-      showMessage(`击中了！少帅狂暴 Lv.${e.rageLevel}`, 1300);
+    if (!isLastBullet) {
+      if (e.rageLevel >= 8) {
+        showMessage(`少帅已经疯了！狂暴 Lv.${e.rageLevel}`, 1300);
+      } else {
+        showMessage(`击中了！少帅狂暴 Lv.${e.rageLevel}`, 1300);
+      }
     }
   }
 
@@ -1379,6 +1764,7 @@
 
   // ============================ 插刀 ============================
   function tryInsertKnife() {
+    if (currentRole === "marshal") return;
     if (state !== "playing") return;
     if (lockState !== "idle") return;
     if (!hasKey) { showMessage("你需要先找到那把刀", 1400); return; }
@@ -1401,8 +1787,8 @@
     shake = Math.max(shake, 1.6);
   }
 
-  // ============================ 敌人更新 ============================
-  function updateSingleEnemy(e, dt, preset) {
+  // ============================ 少帅 AI ============================
+  function updateSingleEnemyShaoshuai(e, dt, preset) {
     e.stunTimer = Math.max(0, e.stunTimer - dt);
     e.activeTimer -= dt;
     if (e.activeTimer > 0) return;
@@ -1415,9 +1801,7 @@
         if (!e.wanderTarget || Math.hypot(e.wanderTarget.x - e.x, e.wanderTarget.y - e.y) < 0.6) {
           e.wanderTarget = randomWalkableCell();
         }
-        if (e.wanderTarget) {
-          e.path = findPath(e.x, e.y, e.wanderTarget.x, e.wanderTarget.y);
-        }
+        if (e.wanderTarget) e.path = findPath(e.x, e.y, e.wanderTarget.x, e.wanderTarget.y);
       }
     }
 
@@ -1428,31 +1812,211 @@
         const d = Math.hypot(dx, dy);
         const baseSpeed = hasKey ? 0.90 : 0.72;
         const rageMult = 1 + e.rageLevel * 0.20;
-        const lockBoost = lockState === "inserted" ? 1.15 : 1;
-        const speed = Math.min(
-          MAX_ENEMY_SPEED,
-          baseSpeed * rageMult * lockBoost * preset.enemySpeedMult
-        );
+        const lockBoost = lockState === "inserted" ? 1.30 : 1;
+        const rawSpeed = baseSpeed * rageMult * lockBoost * preset.enemySpeedMult;
+
+        let speed;
+        if (lockState === "inserted") {
+          speed = Math.min(MAX_ENEMY_SPEED_LOCKED, rawSpeed);
+        } else {
+          speed = Math.min(MAX_ENEMY_SPEED, rawSpeed);
+        }
+
         if (d < 0.08) e.path.shift();
-        else { e.x += (dx / d) * speed * dt; e.y += (dy / d) * speed * dt; }
+        else {
+          const moveX = (dx / d) * speed * dt;
+          const moveY = (dy / d) * speed * dt;
+          moveEntityWithSubsteps(e, moveX, moveY, 0.16);
+        }
       }
+    }
+  }
+
+  // ============================ 逃离者 AI ============================
+  function updateSingleEnemyEscaper(e, dt) {
+    e.repathTimer -= dt;
+
+    const distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
+    const playerThreat = distToPlayer < 7.0;
+
+    // 卡住检测
+    const moved = Math.hypot(e.x - (e.lastX ?? e.x), e.y - (e.lastY ?? e.y));
+    e.lastX = e.x;
+    e.lastY = e.y;
+    if (moved < 0.02) {
+      e.stuckTimer += dt;
+    } else {
+      e.stuckTimer = 0;
+    }
+    if (e.stuckTimer > 0.35) {
+      e.stuckTimer = 0;
+      e.repathTimer = 0;
+      e.path = [];
+      const safe = findWalkableNear(e.x, e.y, 0.16);
+      e.x = safe.x;
+      e.y = safe.y;
+    }
+
+    if (e.repathTimer <= 0) {
+      let targetX = null;
+      let targetY = null;
+
+      if (playerThreat) {
+        const pDist = computeBFSFrom(player.x, player.y);
+        let best = null;
+        let bestScore = -Infinity;
+        for (let y = 1; y < MAP_H - 1; y++) {
+          for (let x = 1; x < MAP_W - 1; x++) {
+            if (map[y][x] !== 0) continue;
+            const pd = pDist[y][x];
+            if (pd < 0) continue;
+            const xd = Math.abs(x - exitCell.x) + Math.abs(y - exitCell.y);
+            const score = pd * 3.0 - xd * 0.4 + Math.random() * 0.01;
+            if (score > bestScore) {
+              bestScore = score;
+              best = { x, y };
+            }
+          }
+        }
+        if (best) {
+          targetX = best.x + 0.5;
+          targetY = best.y + 0.5;
+        }
+      } else {
+        if (!escaperVisitedGun && !hasGun && !gunPicked) {
+          targetX = gunPosition.x;
+          targetY = gunPosition.y;
+        } else if (!escaperVisitedKey && !hasKey && lockState === "idle") {
+          targetX = keyPosition.x;
+          targetY = keyPosition.y;
+        } else {
+          targetX = exitCell.x + 0.5;
+          targetY = exitCell.y + 0.5;
+        }
+      }
+
+      if (targetX !== null) {
+        let tx = Math.floor(targetX);
+        let ty = Math.floor(targetY);
+        if (map[ty]?.[tx] !== 0) {
+          targetX = exitCell.x + 0.5;
+          targetY = exitCell.y + 0.5;
+        }
+        e.path = findPath(e.x, e.y, targetX, targetY);
+
+        if (!e.path.length) {
+          const reach = computeBFSFrom(e.x, e.y);
+          let best = null, bestScore = -Infinity;
+          for (let y = 1; y < MAP_H - 1; y++) {
+            for (let x = 1; x < MAP_W - 1; x++) {
+              if (map[y][x] !== 0) continue;
+              const rd = reach[y][x];
+              if (rd < 0) continue;
+              const score = rd + Math.random() * 0.5;
+              if (score > bestScore) { bestScore = score; best = { x, y }; }
+            }
+          }
+          if (best) {
+            e.path = findPath(e.x, e.y, best.x + 0.5, best.y + 0.5);
+          }
+        }
+      }
+      e.repathTimer = 0.45;
+    }
+
+    const t = e.path[0];
+    if (t) {
+      const dx = t.x - e.x, dy = t.y - e.y;
+      const d = Math.hypot(dx, dy);
+
+      if (d > 1.5) {
+        e.path = [];
+        e.repathTimer = 0;
+      } else {
+        let speed = ESCAPER_BASE_SPEED;
+        if (distToPlayer < 5) speed *= 1.15;
+
+        if (d < 0.08) {
+          e.path.shift();
+        } else {
+          const moveX = (dx / d) * speed * dt;
+          const moveY = (dy / d) * speed * dt;
+          moveEntityWithSubsteps(e, moveX, moveY, 0.16);
+        }
+      }
+    } else {
+      e.repathTimer = 0;
+    }
+
+    const gx = Math.floor(e.x), gy = Math.floor(e.y);
+    if (gx >= 0 && gx < MAP_W && gy >= 0 && gy < MAP_H) {
+      escaperTrail.add(`${gx},${gy}`);
+    }
+
+    if (!escaperVisitedGun && !hasGun && !gunPicked &&
+        Math.hypot(e.x - gunPosition.x, e.y - gunPosition.y) < 0.9) {
+      escaperVisitedGun = true;
+      e.repathTimer = 0;
+    }
+    if (!escaperVisitedKey && !hasKey && lockState === "idle" &&
+        Math.hypot(e.x - keyPosition.x, e.y - keyPosition.y) < 0.9) {
+      escaperVisitedKey = true;
+      e.repathTimer = 0;
+    }
+
+    if (escapeGraceTimer <= 0 && distToPlayer < 0.5) {
+      endGame(true);
+      return;
+    }
+    const dExit = Math.hypot(e.x - (exitCell.x + 0.5), e.y - (exitCell.y + 0.5));
+    if (dExit < 0.65) {
+      endGame(false);
+      return;
     }
   }
 
   function updateEnemies(dt) {
     const preset = currentPreset();
 
+    if (currentRole === "marshal") {
+      if (playerFrozenTimer > 0) {
+        playerFrozenTimer = Math.max(0, playerFrozenTimer - dt);
+      }
+      if (escapeGraceTimer > 0) {
+        escapeGraceTimer = Math.max(0, escapeGraceTimer - dt);
+      }
+
+      for (const e of enemies) {
+        if (state !== "playing") return;
+        updateSingleEnemyEscaper(e, dt);
+      }
+
+      const nearest = enemies[0];
+      const nearestDist = nearest ? Math.hypot(player.x - nearest.x, player.y - nearest.y) : 999;
+      if (nearest) {
+        updateNearbyVoice(nearestDist, nearest.x, nearest.y);
+      } else {
+        updateNearbyVoice(nearestDist);
+      }
+
+      const detectRange = preset.detectRange;
+      if (playerFrozenTimer > 0) {
+        statusText.textContent = `冻结 ${playerFrozenTimer.toFixed(1)}s · 逃离者正在逃跑`;
+      } else if (detectRange > 0 && nearestDist < detectRange + 6) {
+        statusText.textContent = `逃离者就在附近（${nearestDist.toFixed(1)} 格）`;
+      } else {
+        statusText.textContent = "逃离者正在逃跑";
+      }
+      return;
+    }
+
     const frozen = graceTimer > 0;
     if (frozen) graceTimer = Math.max(0, graceTimer - dt);
 
     if (frozen) {
-      for (const e of enemies) {
-        e.stunTimer = Math.max(e.stunTimer, 0.2);
-      }
+      for (const e of enemies) e.stunTimer = Math.max(e.stunTimer, 0.2);
     } else {
-      for (const e of enemies) {
-        updateSingleEnemy(e, dt, preset);
-      }
+      for (const e of enemies) updateSingleEnemyShaoshuai(e, dt, preset);
     }
 
     if (!enemies.length) return;
@@ -1465,7 +2029,7 @@
     }
 
     hitVoiceBoost = Math.max(0, hitVoiceBoost - dt * HIT_VOICE_BOOST_DECAY);
-    updateNearbyVoice(nearestDist);
+    updateNearbyVoice(nearestDist, nearest.x, nearest.y);
 
     const detectRange = preset.detectRange;
     const danger = detectRange > 0 && nearestDist < detectRange;
@@ -1514,6 +2078,14 @@
     if (hitConfirmTimer > 0) hitConfirmTimer = Math.max(0, hitConfirmTimer - dt);
     if (whiteFlash > 0) whiteFlash = Math.max(0, whiteFlash - dt * 8);
 
+    // 换弹更新
+    updateReload(dt);
+
+    // 少帅模式冻结
+    if (currentRole === "marshal" && playerFrozenTimer > 0) {
+      return;
+    }
+
     const now = performance.now();
     if ((now - lastMouseMoveTime) / 1000 > PITCH_RECENTER_DELAY) {
       if (Math.abs(player.pitch) > 0.005) {
@@ -1523,13 +2095,11 @@
       }
     }
 
-    if (triggerHeld && hasGun && state === "playing") {
+    // 换弹中不能开枪
+    if (currentRole === "escaper" && !isReloading && triggerHeld && hasGun && state === "playing") {
       if (!autoFiring) {
         const held = (performance.now() - triggerHeldSince) / 1000;
-        if (held >= AUTO_FIRE_DELAY) {
-          autoFiring = true;
-          autoFireTimer = 0;
-        }
+        if (held >= AUTO_FIRE_DELAY) { autoFiring = true; autoFireTimer = 0; }
       }
       if (autoFiring) {
         autoFireTimer -= dt;
@@ -1541,7 +2111,18 @@
     }
 
     const running = input.ShiftLeft || input.ShiftRight || input.run;
-    const speed = (running ? RUN_SPEED : MOVE_SPEED) * dt;
+    let baseSpeed = running ? RUN_SPEED : MOVE_SPEED;
+
+    // 少帅模式不支持奔跑
+    if (currentRole === "marshal") {
+      baseSpeed = MOVE_SPEED;
+    }
+    // 换弹中移速减半
+    if (isReloading) {
+      baseSpeed *= 0.5;
+    }
+
+    const speed = baseSpeed * dt;
     let fwd = 0, str = 0;
     if (input.KeyW || input.ArrowUp || input.forward) fwd += 1;
     if (input.KeyS || input.ArrowDown || input.backward) fwd -= 1;
@@ -1560,13 +2141,17 @@
     const dy = (Math.sin(player.angle) * fwd + Math.sin(player.angle + Math.PI / 2) * str) * speed;
     movePlayer(dx, dy);
 
+    // 少帅模式：不做任何武器交互
+    if (currentRole === "marshal") return;
+
     if (!hasGun && !gunPicked &&
         Math.hypot(player.x - gunPosition.x, player.y - gunPosition.y) < 0.55) {
       hasGun = true;
       gunPicked = true;
-      updateAmmoBadge();
+      magazine = generateMagazine();
+      updateAmmoUI();
       objectiveText.textContent = "再找到那把刀";
-      showMessage("捡到手枪，子弹无限。左键 = 单发，按住 0.5 秒进入连发", 3200);
+      showMessage("捡到手枪，10 发子弹。左键开火，F 换弹", 3200);
       playTone(520, 0.1, "square", 0.06);
       window.setTimeout(() => playTone(700, 0.12, "square", 0.05), 90);
     }
@@ -1609,7 +2194,6 @@
   }
 
   // ============================ 渲染 ============================
-  // castRay 现在返回命中的格子坐标 mx / my，用于查询墙面惊吓
   function castRay(angle) {
     const dx = Math.cos(angle), dy = Math.sin(angle);
     let mx = Math.floor(player.x), my = Math.floor(player.y);
@@ -1630,12 +2214,7 @@
       ? (mx - player.x + (1 - sx) / 2) / (dx || 0.000001)
       : (my - player.y + (1 - sy) / 2) / (dy || 0.000001);
     const hit = side === 0 ? player.y + dist * dy : player.x + dist * dx;
-    return {
-      distance: Math.max(dist, 0.001),
-      side, tile,
-      texture: hit - Math.floor(hit),
-      mx, my
-    };
+    return { distance: Math.max(dist, 0.001), side, tile, texture: hit - Math.floor(hit), mx, my };
   }
 
   function drawBackground(W, H, horizonY) {
@@ -1701,31 +2280,26 @@
     }
   }
 
-  // 【新增】把某一列墙画成少帅照片（带闪烁）
   function renderWallScareStrip(x, top, sw, wallHeight, hit, corrected, focal, distShade, sideShade, flickerMult, scare) {
-    // 先画默认木色底
     const light = Math.floor(105 * distShade * sideShade * flickerMult);
     ctx.fillStyle = `rgb(${light},${Math.floor(light * 0.89)},${Math.floor(light * 0.72)})`;
     ctx.fillRect(x, top, sw + 1, wallHeight);
 
-    if (!wallTexture) return;
+    const tex = activeWallTexture();
+    if (!tex) return;
 
-    // 生命进度
-    const t = scare.life / scare.maxLife;      // 1 -> 0
-    // 淡入 0.15，淡出 0.25
+    const t = scare.life / scare.maxLife;
     let alpha;
     if (t > 0.85) alpha = (1 - t) / 0.15;
     else if (t < 0.3) alpha = t / 0.3;
     else alpha = 1;
 
-    // 闪烁：每个墙有自己的相位
     const flickerVal = 0.5 + 0.5 * Math.sin(scare.life * 38 + scare.phase);
     alpha *= 0.55 + 0.55 * flickerVal;
 
     alpha = Math.max(0, Math.min(1, alpha));
     if (alpha <= 0.01) return;
 
-    // 采样 UV
     const worldColWidth = Math.max(0.0005, corrected / focal);
     const srcW = Math.max(1, WALL_TEX_SIZE * worldColWidth);
     let srcX = hit.texture * WALL_TEX_SIZE - srcW * 0.5;
@@ -1735,17 +2309,16 @@
     ctx.save();
     ctx.globalAlpha = alpha;
     if (srcX + srcW <= WALL_TEX_SIZE) {
-      ctx.drawImage(wallTexture, srcX, 0, srcW, WALL_TEX_SIZE, x, top, sw + 1, wallHeight);
+      ctx.drawImage(tex, srcX, 0, srcW, WALL_TEX_SIZE, x, top, sw + 1, wallHeight);
     } else {
       const part1 = WALL_TEX_SIZE - srcX;
       const part2 = srcW - part1;
       const xPart1 = (sw + 1) * (part1 / srcW);
-      ctx.drawImage(wallTexture, srcX, 0, part1, WALL_TEX_SIZE, x, top, xPart1, wallHeight);
-      ctx.drawImage(wallTexture, 0, 0, part2, WALL_TEX_SIZE, x + xPart1, top, (sw + 1) - xPart1, wallHeight);
+      ctx.drawImage(tex, srcX, 0, part1, WALL_TEX_SIZE, x, top, xPart1, wallHeight);
+      ctx.drawImage(tex, 0, 0, part2, WALL_TEX_SIZE, x + xPart1, top, (sw + 1) - xPart1, wallHeight);
     }
     ctx.restore();
 
-    // 距离衰减
     const dark = 1 - Math.max(0.05, distShade * sideShade * flickerMult);
     if (dark > 0.01) {
       ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.85, dark)})`;
@@ -1930,6 +2503,7 @@
 
   function renderCrosshair() {
     if (state !== "playing") return;
+    if (currentRole === "marshal") return;
     const W = canvas.width, H = canvas.height;
     const cx = W / 2, cy = H / 2;
 
@@ -1940,11 +2514,9 @@
     const hitK = hitConfirmTimer > 0 ? Math.min(1, hitConfirmTimer / 0.28) : 0;
 
     const scaleBase = Math.max(0.85, Math.min(1.6, H / 720));
-
     const inner = (9 + hitK * 3 + fire * 6) * scaleBase * breath;
     const armLen = (13 + hitK * 5) * scaleBase * (1 + fire * 0.3);
     const outer = inner + armLen;
-
     const lw = Math.max(2, H * 0.004) * (1 + hitK * 0.65 + fire * 0.4);
 
     let color, glowColor;
@@ -1983,12 +2555,81 @@
       ctx.arc(0, 0, Math.max(1.8, 3.5 * scaleBase * (1 + hitK * 0.8)), 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
+  }
 
+  // 【新增】少帅模式下的青色轨迹地面（红色渲染）
+  function renderMarshalTrailGround(horizonY, focal) {
+    const W = canvas.width, H = canvas.height;
+    const fov = getFov();
+    const tiles = [];
+    for (const key of escaperTrail) {
+      const parts = key.split(",");
+      const gx = Number(parts[0]);
+      const gy = Number(parts[1]);
+      const cx = gx + 0.5, cy = gy + 0.5;
+      const dx = cx - player.x, dy = cy - player.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 14 || dist < 0.12) continue;
+      const rel = normalizeAngle(Math.atan2(dy, dx) - player.angle);
+      if (Math.abs(rel) > fov * 0.75) continue;
+      tiles.push({ gx, gy, dist });
+    }
+    if (!tiles.length) return;
+    tiles.sort((a, b) => b.dist - a.dist);
+
+    ctx.save();
+    for (const { gx, gy, dist } of tiles) {
+      // 投影 4 个角
+      const corners = [
+        [gx, gy], [gx + 1, gy], [gx + 1, gy + 1], [gx, gy + 1]
+      ];
+      const pts = [];
+      let valid = true;
+      for (const [wx, wy] of corners) {
+        const dx = wx - player.x, dy = wy - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.12) { valid = false; break; }
+        const rel = normalizeAngle(Math.atan2(dy, dx) - player.angle);
+        if (Math.abs(rel) > fov * 0.95) { valid = false; break; }
+        const corr = d * Math.cos(rel);
+        if (corr <= 0.08) { valid = false; break; }
+        const sx = W / 2 + Math.tan(rel) * focal;
+        const sy = horizonY + 0.5 * (H / corr);
+        pts.push([sx, sy]);
+      }
+      if (!valid) continue;
+
+      // 检查 z-buffer 遮挡（用瓦片中心列）
+      const cx = gx + 0.5, cy2 = gy + 0.5;
+      const cdx = cx - player.x, cdy = cy2 - player.y;
+      const cDist = Math.hypot(cdx, cdy);
+      const cRel = normalizeAngle(Math.atan2(cdy, cdx) - player.angle);
+      const centerCol = Math.max(0, Math.min(W - 1, Math.round(W / 2 + Math.tan(cRel) * focal)));
+      if ((zBuffer[centerCol] ?? Infinity) < cDist * Math.cos(cRel) - 0.25) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(215, 42, 30, 0.30)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 60, 40, 0.22)";
+      ctx.lineWidth = Math.max(1, H * 0.0016);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
   function renderWorld() {
     const W = canvas.width, H = canvas.height;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#050403";
+    ctx.fillRect(0, 0, W, H);
+
     const shakeX = shake ? (Math.random() - 0.5) * shake * 3.0 : 0;
     const shakeY = shake ? (Math.random() - 0.5) * shake * 2.1 : 0;
     const pitchShift = (player.pitch - viewKick * 0.16) * H * 0.78;
@@ -2019,13 +2660,11 @@
       const flicker = 0.92 + Math.random() * 0.08;
 
       if (hit.tile !== 2 && hit.tile !== 3) {
-        // 【核心】检查这面墙是否被“惊吓”了
         const key = hit.mx + "," + hit.my;
         const scare = wallScares.get(key);
         if (scare) {
           renderWallScareStrip(x, top, sw, wallH, hit, corr, focal, distShade, sideShade, flicker * flickerMult, scare);
         } else {
-          // 默认木色
           const light = Math.floor(105 * distShade * sideShade * plank * flicker * flickerMult);
           ctx.fillStyle = `rgb(${light},${Math.floor(light * 0.89)},${Math.floor(light * 0.72)})`;
           ctx.fillRect(x, top, sw + 1, wallH);
@@ -2036,15 +2675,21 @@
       for (let i = 0; i < sw; i++) zBuffer[x + i] = corr;
     }
 
-    renderSprite(keyPosition.x, keyPosition.y, "key", horizonY);
-    renderSprite(gunPosition.x, gunPosition.y, "gun", horizonY);
+    // 【新增】少帅模式：青色轨迹地面红色高亮
+    if (currentRole === "marshal") {
+      renderMarshalTrailGround(horizonY, focal);
+    }
+
+    if (currentRole === "escaper") {
+      renderSprite(keyPosition.x, keyPosition.y, "key", horizonY);
+      renderSprite(gunPosition.x, gunPosition.y, "gun", horizonY);
+    }
 
     renderCasings(horizonY);
     renderScares(horizonY);
     renderGhost(horizonY);
 
     for (const e of enemies) renderEnemySprite(e, horizonY);
-
     renderBlood(horizonY);
 
     if (muzzleFlash > 0.01) {
@@ -2055,7 +2700,6 @@
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
     }
-
     ctx.restore();
 
     {
@@ -2082,7 +2726,7 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    if (graceTimer > 0) {
+    if (currentRole === "escaper" && graceTimer > 0) {
       const k = Math.min(1, graceTimer / START_GRACE_DURATION);
       const pulse = 0.35 + Math.sin(performance.now() / 140) * 0.25;
       const g = ctx.createRadialGradient(W / 2, H / 2, W * 0.30, W / 2, H / 2, W * 0.78);
@@ -2092,16 +2736,29 @@
       ctx.fillRect(0, 0, W, H);
     }
 
+    if (currentRole === "marshal" && playerFrozenTimer > 0) {
+      const k = Math.min(1, playerFrozenTimer / START_GRACE_DURATION);
+      const pulse = 0.35 + Math.sin(performance.now() / 140) * 0.25;
+      const g = ctx.createRadialGradient(W / 2, H / 2, W * 0.30, W / 2, H / 2, W * 0.78);
+      g.addColorStop(0, "rgba(255, 190, 80, 0)");
+      g.addColorStop(1, `rgba(255, 180, 60, ${(0.40 + pulse * 0.30) * k})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
     if (whiteFlash > 0.01) {
       ctx.fillStyle = `rgba(255, 235, 210, ${Math.min(0.35, whiteFlash * 0.35)})`;
       ctx.fillRect(0, 0, W, H);
     }
 
-    if (hasGun && state === "playing") renderViewModel(horizonY);
+    // 【改动】换弹时手枪倾斜显示；少帅模式不显示手枪
+    if (currentRole === "escaper" && hasGun && state === "playing") {
+      renderViewModel(horizonY);
+    }
 
     renderCrosshair();
 
-    if (lockState === "inserted" && state === "playing") {
+    if (currentRole === "escaper" && lockState === "inserted" && state === "playing") {
       const t = Math.ceil(lockTimer);
       ctx.save();
       ctx.textAlign = "center";
@@ -2114,6 +2771,22 @@
       ctx.font = `500 ${Math.round(H * 0.03)}px system-ui`;
       ctx.fillStyle = "rgba(255, 190, 150, 0.95)";
       ctx.fillText("撑住！铁笼正在绞动", W / 2, H * 0.26 + H * 0.045);
+      ctx.restore();
+    }
+
+    if (currentRole === "marshal" && playerFrozenTimer > 0 && state === "playing") {
+      const t = Math.ceil(playerFrozenTimer);
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.font = `bold ${Math.round(H * 0.13)}px system-ui`;
+      ctx.fillStyle = `rgba(255, 180, 60, ${0.72 + Math.sin(performance.now() / 140) * 0.22})`;
+      ctx.shadowColor = "rgba(255, 140, 20, 0.9)";
+      ctx.shadowBlur = 30;
+      ctx.fillText(String(t), W / 2, H * 0.26);
+      ctx.shadowBlur = 0;
+      ctx.font = `500 ${Math.round(H * 0.03)}px system-ui`;
+      ctx.fillStyle = "rgba(255, 210, 150, 0.95)";
+      ctx.fillText("快追！逃离者正在逃跑", W / 2, H * 0.26 + H * 0.045);
       ctx.restore();
     }
 
@@ -2210,7 +2883,8 @@
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
     if ((zBuffer[col] ?? Infinity) < dist - 0.2) return;
 
-    if (!doubaoImage.complete || !doubaoImage.naturalWidth) return;
+    const img = (currentRole === "marshal") ? doubaoNormalImage : doubaoImage;
+    if (!img.complete || !img.naturalWidth) return;
 
     ctx.save();
     const spriteH = Math.min(H * 2.2, scale * 0.95);
@@ -2220,12 +2894,14 @@
     ctx.shadowColor = "rgba(150, 15, 9, 0.75)";
     ctx.shadowBlur = dist < 2.5 ? 34 : 14;
     ctx.globalAlpha = Math.max(0.5, 1 - dist / 20);
-    ctx.drawImage(doubaoImage, left, top, spriteW, spriteH);
-    ctx.globalCompositeOperation = "multiply";
-    const rageTint = Math.min(0.65, e.rageLevel * 0.075);
-    ctx.fillStyle = `rgba(80,0,0,${Math.min(0.8, 0.05 + dist * 0.014 + rageTint)})`;
-    ctx.fillRect(left, top, spriteW, spriteH);
-    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(img, left, top, spriteW, spriteH);
+    if (currentRole !== "marshal") {
+      ctx.globalCompositeOperation = "multiply";
+      const rageTint = Math.min(0.65, e.rageLevel * 0.075);
+      ctx.fillStyle = `rgba(80,0,0,${Math.min(0.8, 0.05 + dist * 0.014 + rageTint)})`;
+      ctx.fillRect(left, top, spriteW, spriteH);
+      ctx.globalCompositeOperation = "source-over";
+    }
     ctx.restore();
   }
 
@@ -2283,6 +2959,7 @@
     ctx.restore();
   }
 
+  // 【改动】手枪视图模型：换弹时倾斜 + 震动
   function renderViewModel(horizonY) {
     const W = canvas.width, H = canvas.height;
     const moving = input.KeyW || input.KeyS || input.KeyA || input.KeyD ||
@@ -2293,9 +2970,24 @@
     const bobY = moving ? Math.abs(Math.cos(player.walkPhase)) * H * 0.014 : 0;
     const kickEase = gunKick;
     const S = H * 0.60;
-    const gunCX = W * 0.64 + bobX + kickEase * W * 0.026;
-    const gunCY = H * 1.00 + bobY + kickEase * H * 0.22;
-    const rot = -0.16 + kickEase * 0.42;
+
+    // 换弹时的手枪倾斜与震动
+    let reloadRot = 0;
+    let reloadJitterX = 0;
+    let reloadJitterY = 0;
+    if (isReloading) {
+      const progress = 1 - reloadTimer / RELOAD_TIME;
+      // 倾斜 -0.55 弧度（往左歪），然后回来
+      reloadRot = Math.sin(progress * Math.PI) * -0.55;
+      // 震动：随时间抖动
+      const jitter = Math.sin(performance.now() / 32) * 0.012 + Math.sin(performance.now() / 17) * 0.008;
+      reloadJitterX = jitter * W;
+      reloadJitterY = jitter * H;
+    }
+
+    const gunCX = W * 0.64 + bobX + kickEase * W * 0.026 + reloadJitterX;
+    const gunCY = H * 1.00 + bobY + kickEase * H * 0.22 + reloadJitterY;
+    const rot = -0.16 + kickEase * 0.42 + reloadRot;
 
     ctx.save();
     ctx.translate(gunCX, gunCY);
@@ -2356,10 +3048,47 @@
       ctx.arc(0, -S * 0.90, S * 0.50, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // 换弹期间枪上显示一个弹匣阴影
+    if (isReloading) {
+      ctx.fillStyle = "rgba(20, 20, 25, 0.55)";
+      ctx.fillRect(-S * 0.06, -S * 0.1, S * 0.12, S * 0.2);
+    }
+
     ctx.restore();
   }
 
   // ============ 小地图 ============
+  function drawMinimapCells(x0, y0, cell) {
+    if (currentRole === "marshal") {
+      for (let y = 0; y < MAP_H; y++) {
+        for (let x = 0; x < MAP_W; x++) {
+          const v = map[y][x];
+          let col;
+          if (v === 0) col = "#8a785a";
+          else col = "#2a231b";
+          ctx.fillStyle = col;
+          ctx.fillRect(x0 + x * cell, y0 + y * cell, cell - 0.6, cell - 0.6);
+        }
+      }
+      return;
+    }
+
+    for (let y = 0; y < MAP_H; y++) {
+      for (let x = 0; x < MAP_W; x++) {
+        if (!explored[y][x]) continue;
+        const v = map[y][x];
+        let col;
+        if (v === 0) col = "#8a785a";
+        else if (v === 2) col = "#ffcb66";
+        else if (v === 3) col = "#7ee2a8";
+        else col = "#2a231b";
+        ctx.fillStyle = col;
+        ctx.fillRect(x0 + x * cell, y0 + y * cell, cell - 0.6, cell - 0.6);
+      }
+    }
+  }
+
   function renderMinimap() {
     const W = canvas.width;
     const cell = Math.max(4, Math.min(7, W / 150));
@@ -2380,6 +3109,27 @@
     ctx.shadowBlur = 0;
 
     drawMinimapCells(x0, y0, cell);
+
+    if (currentRole === "marshal") {
+      ctx.shadowColor = "rgba(120, 220, 240, 0.85)";
+      ctx.shadowBlur = 8;
+      for (const key of escaperTrail) {
+        const parts = key.split(",");
+        const gx = Number(parts[0]);
+        const gy = Number(parts[1]);
+        ctx.fillStyle = "rgba(120, 220, 240, 0.55)";
+        ctx.fillRect(x0 + gx * cell, y0 + gy * cell, cell - 0.6, cell - 0.6);
+      }
+      ctx.shadowBlur = 0;
+
+      for (const e of enemies) {
+        drawEnemyAvatarOnMap(x0, y0, cell, e);
+      }
+
+      drawPlayerMarker(x0, y0, cell);
+      ctx.restore();
+      return;
+    }
 
     if (!hasGun && !gunPicked && gunCellRef && explored[gunCellRef.y] && explored[gunCellRef.y][gunCellRef.x]) {
       ctx.shadowColor = "#7fb8ff"; ctx.shadowBlur = 10;
@@ -2435,42 +3185,46 @@
 
     drawMinimapCells(x0, y0, cell);
 
-    if (!hasGun && !gunPicked && gunCellRef && explored[gunCellRef.y] && explored[gunCellRef.y][gunCellRef.x]) {
-      ctx.shadowColor = "#7fb8ff"; ctx.shadowBlur = 14;
-      ctx.fillStyle = "#b8dcff";
-      ctx.beginPath();
-      ctx.arc(x0 + (gunCellRef.x + 0.5) * cell, y0 + (gunCellRef.y + 0.5) * cell, cell * 0.55, 0, Math.PI * 2);
-      ctx.fill();
+    if (currentRole === "marshal") {
+      ctx.shadowColor = "rgba(120, 220, 240, 0.85)";
+      ctx.shadowBlur = 10;
+      for (const key of escaperTrail) {
+        const parts = key.split(",");
+        const gx = Number(parts[0]);
+        const gy = Number(parts[1]);
+        ctx.fillStyle = "rgba(120, 220, 240, 0.55)";
+        ctx.fillRect(x0 + gx * cell, y0 + gy * cell, cell - 0.6, cell - 0.6);
+      }
       ctx.shadowBlur = 0;
-      ctx.fillStyle = "#001a2e";
-      ctx.font = `bold ${Math.max(11, cell * 0.6)}px system-ui`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("枪", x0 + (gunCellRef.x + 0.5) * cell, y0 + (gunCellRef.y + 0.5) * cell);
-    }
-    if (!hasKey && lockState === "idle" && keyCellRef && explored[keyCellRef.y] && explored[keyCellRef.y][keyCellRef.x]) {
-      ctx.shadowColor = "#f6c74f"; ctx.shadowBlur = 14;
-      ctx.fillStyle = "#ffe08a";
-      ctx.beginPath();
-      ctx.arc(x0 + (keyCellRef.x + 0.5) * cell, y0 + (keyCellRef.y + 0.5) * cell, cell * 0.55, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "#3a2500";
-      ctx.font = `bold ${Math.max(11, cell * 0.6)}px system-ui`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("刀", x0 + (keyCellRef.x + 0.5) * cell, y0 + (keyCellRef.y + 0.5) * cell);
-    }
 
-    drawCageMarker(x0, y0, cell);
+      for (const e of enemies) drawEnemyAvatarOnMap(x0, y0, cell, e);
+    } else {
+      if (!hasGun && !gunPicked && gunCellRef && explored[gunCellRef.y] && explored[gunCellRef.y][gunCellRef.x]) {
+        ctx.shadowColor = "#7fb8ff"; ctx.shadowBlur = 14;
+        ctx.fillStyle = "#b8dcff";
+        ctx.beginPath();
+        ctx.arc(x0 + (gunCellRef.x + 0.5) * cell, y0 + (gunCellRef.y + 0.5) * cell, cell * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      if (!hasKey && lockState === "idle" && keyCellRef && explored[keyCellRef.y] && explored[keyCellRef.y][keyCellRef.x]) {
+        ctx.shadowColor = "#f6c74f"; ctx.shadowBlur = 14;
+        ctx.fillStyle = "#ffe08a";
+        ctx.beginPath();
+        ctx.arc(x0 + (keyCellRef.x + 0.5) * cell, y0 + (keyCellRef.y + 0.5) * cell, cell * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      drawCageMarker(x0, y0, cell);
 
-    const preset = currentPreset();
-    const detectRange = preset.detectRange;
-    if (detectRange > 0) {
-      for (const e of enemies) {
-        const dToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
-        if (dToPlayer >= detectRange) continue;
-        drawEnemyAvatarOnMap(x0, y0, cell, e);
+      const preset = currentPreset();
+      const detectRange = preset.detectRange;
+      if (detectRange > 0) {
+        for (const e of enemies) {
+          const dToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
+          if (dToPlayer >= detectRange) continue;
+          drawEnemyAvatarOnMap(x0, y0, cell, e);
+        }
       }
     }
 
@@ -2485,23 +3239,8 @@
     ctx.restore();
   }
 
-  function drawMinimapCells(x0, y0, cell) {
-    for (let y = 0; y < MAP_H; y++) {
-      for (let x = 0; x < MAP_W; x++) {
-        if (!explored[y][x]) continue;
-        const v = map[y][x];
-        let col;
-        if (v === 0) col = "#8a785a";
-        else if (v === 2) col = "#ffcb66";
-        else if (v === 3) col = "#7ee2a8";
-        else col = "#2a231b";
-        ctx.fillStyle = col;
-        ctx.fillRect(x0 + x * cell, y0 + y * cell, cell - 0.6, cell - 0.6);
-      }
-    }
-  }
-
   function drawCageMarker(x0, y0, cell) {
+    if (currentRole === "marshal") return;
     const ex = x0 + (exitCell.x + 0.5) * cell;
     const ey = y0 + (exitCell.y + 0.5) * cell;
     const opened = (lockState === "open");
@@ -2534,11 +3273,18 @@
     const avatarR = Math.max(9, cell * 1.35);
     const size = avatarR * 2;
 
+    const isMarshal = currentRole === "marshal";
+    const img = isMarshal ? doubaoNormalImage : doubaoImage;
+    const pulseColor = isMarshal ? "rgba(120, 220, 240, 0.95)" : "rgba(255, 40, 20, 0.95)";
+    const pulseStrokeBase = isMarshal ? "rgba(120, 220, 240," : "rgba(255, 60, 40,";
+    const ringColor = isMarshal ? "#9fe0ff" : "#ffb28a";
+    const ringShadow = isMarshal ? "rgba(90, 200, 240, 0.9)" : "rgba(255, 80, 40, 0.85)";
+
     const pulse = 0.55 + Math.sin(performance.now() / 180) * 0.4;
     ctx.save();
-    ctx.shadowColor = "rgba(255, 40, 20, 0.95)";
+    ctx.shadowColor = pulseColor;
     ctx.shadowBlur = 16;
-    ctx.strokeStyle = `rgba(255, 60, 40, ${Math.max(0.45, pulse)})`;
+    ctx.strokeStyle = `${pulseStrokeBase} ${Math.max(0.45, pulse)})`;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(ex, ey, avatarR + 3, 0, Math.PI * 2);
@@ -2551,34 +3297,27 @@
     ctx.closePath();
     ctx.clip();
 
-    if (doubaoNormalImage.complete && doubaoNormalImage.naturalWidth) {
+    if (img.complete && img.naturalWidth) {
       ctx.fillStyle = "#000";
       ctx.fillRect(ex - avatarR, ey - avatarR, size, size);
-      ctx.drawImage(doubaoNormalImage, ex - avatarR, ey - avatarR, size, size);
+      ctx.drawImage(img, ex - avatarR, ey - avatarR, size, size);
+      if (!isMarshal) {
+        ctx.globalCompositeOperation = "multiply";
+        const tint = Math.min(0.6, 0.18 + e.rageLevel * 0.06);
+        ctx.fillStyle = `rgba(140, 10, 5, ${tint})`;
+        ctx.fillRect(ex - avatarR, ey - avatarR, size, size);
+        ctx.globalCompositeOperation = "source-over";
+      }
     } else {
       ctx.fillStyle = "#3a0a08";
       ctx.fillRect(ex - avatarR, ey - avatarR, size, size);
-      ctx.strokeStyle = "#ff6b45";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(ex - avatarR * 0.5, ey - avatarR * 0.5);
-      ctx.lineTo(ex + avatarR * 0.5, ey + avatarR * 0.5);
-      ctx.moveTo(ex + avatarR * 0.5, ey - avatarR * 0.5);
-      ctx.lineTo(ex - avatarR * 0.5, ey + avatarR * 0.5);
-      ctx.stroke();
     }
-
-    ctx.globalCompositeOperation = "multiply";
-    const tint = Math.min(0.6, 0.18 + e.rageLevel * 0.06);
-    ctx.fillStyle = `rgba(140, 10, 5, ${tint})`;
-    ctx.fillRect(ex - avatarR, ey - avatarR, size, size);
-    ctx.globalCompositeOperation = "source-over";
     ctx.restore();
 
     ctx.save();
-    ctx.strokeStyle = "#ffb28a";
+    ctx.strokeStyle = ringColor;
     ctx.lineWidth = 2;
-    ctx.shadowColor = "rgba(255, 80, 40, 0.85)";
+    ctx.shadowColor = ringShadow;
     ctx.shadowBlur = 8;
     ctx.beginPath();
     ctx.arc(ex, ey, avatarR, 0, Math.PI * 2);
@@ -2589,6 +3328,57 @@
   function drawPlayerMarker(x0, y0, cell) {
     const px = x0 + player.x * cell;
     const py = y0 + player.y * cell;
+
+    if (currentRole === "marshal" && doubaoImage.complete && doubaoImage.naturalWidth) {
+      const r = Math.max(8, cell * 1.4);
+      const size = r * 2;
+
+      const pulse = 0.55 + Math.sin(performance.now() / 220) * 0.35;
+      ctx.save();
+      ctx.shadowColor = "rgba(255, 40, 20, 0.95)";
+      ctx.shadowBlur = 16;
+      ctx.strokeStyle = `rgba(255, 60, 40, ${Math.max(0.55, pulse)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(px, py, r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(px - r, py - r, size, size);
+      ctx.drawImage(doubaoImage, px - r, py - r, size, size);
+      ctx.globalCompositeOperation = "multiply";
+      ctx.fillStyle = "rgba(140, 10, 5, 0.35)";
+      ctx.fillRect(px - r, py - r, size, size);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "#ff8a5c";
+      ctx.lineWidth = 2;
+      ctx.shadowColor = "rgba(255, 60, 30, 0.9)";
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "#fff0c8";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + Math.cos(player.angle) * cell * 1.9, py + Math.sin(player.angle) * cell * 1.9);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
     ctx.shadowColor = "#ff5a3c";
     ctx.shadowBlur = 12;
     ctx.fillStyle = "#ff6b45";
@@ -2650,7 +3440,7 @@
 
   // ============================ 主循环 ============================
   function frame(now) {
-    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    const dt = Math.min(MAX_DT, (now - lastTime) / 1000);
     lastTime = now;
     if (state === "playing") {
       updatePlayer(dt);
@@ -2684,6 +3474,7 @@
   window.addEventListener("keydown", (e) => {
     input[e.code] = true;
     if (e.code === "KeyQ" && !e.repeat) tryInsertKnife();
+    if (e.code === "KeyF" && !e.repeat) startReload();
     if (e.code === "Tab") {
       e.preventDefault();
       if (state === "playing") mapExpanded = !mapExpanded;
@@ -2701,6 +3492,7 @@
   document.addEventListener("mousemove", (e) => {
     if (state === "playing" && document.pointerLockElement === canvas) {
       if (Math.abs(e.movementY) > 0.5) lastMouseMoveTime = performance.now();
+      if (currentRole === "marshal" && playerFrozenTimer > 0) return;
       player.angle = normalizeAngle(player.angle + e.movementX * BASE_MOUSE_SENS * sensitivityMult);
       player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
         player.pitch + e.movementY * PITCH_SENSITIVITY * sensitivityMult));
@@ -2730,6 +3522,7 @@
     const on = (e) => {
       e.preventDefault();
       if (control === "fire") { pressTrigger(); btn.classList.add("is-held"); return; }
+      if (control === "reload") { startReload(); btn.classList.add("is-held"); return; }
       if (control === "knife") { tryInsertKnife(); return; }
       input[control] = true;
       btn.classList.add("is-held");
@@ -2738,6 +3531,7 @@
     const off = (e) => {
       e.preventDefault();
       if (control === "fire") { releaseTrigger(); btn.classList.remove("is-held"); return; }
+      if (control === "reload") { btn.classList.remove("is-held"); return; }
       if (control === "knife") { btn.classList.remove("is-held"); return; }
       input[control] = false;
       btn.classList.remove("is-held");
@@ -2750,6 +3544,21 @@
     });
   }
 
+  for (const btn of document.querySelectorAll("[data-role]")) {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.role;
+      if (key !== "escaper" && key !== "marshal") return;
+      currentRole = key;
+      for (const b of document.querySelectorAll("[data-role]")) {
+        b.setAttribute("aria-checked", b === btn ? "true" : "false");
+      }
+      if (key === "marshal") {
+        currentDifficulty = "easy";
+        startGame();
+      }
+    });
+  }
+
   for (const btn of document.querySelectorAll("[data-difficulty]")) {
     btn.addEventListener("click", () => {
       const key = btn.dataset.difficulty;
@@ -2758,7 +3567,9 @@
       for (const b of document.querySelectorAll("[data-difficulty]")) {
         b.setAttribute("aria-checked", b === btn ? "true" : "false");
       }
-      startGame();
+      if (currentRole === "escaper") {
+        startGame();
+      }
     });
   }
 
@@ -2766,6 +3577,6 @@
 
   resizeCanvas();
   renderIdle();
-  buildWallTexture();
+  buildWallTextures();
   requestAnimationFrame(frame);
 })();

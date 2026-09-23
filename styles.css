@@ -5,7 +5,12 @@ html,body{
   user-select:none;-webkit-user-select:none;
 }
 #game-shell{position:fixed;inset:0;overflow:hidden}
-#game{display:block;width:100vw;height:100vh;cursor:crosshair}
+#game{
+  display:block;width:100vw;height:100vh;cursor:crosshair;
+  image-rendering: pixelated;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
 
 .noise,.vignette{position:absolute;inset:0;pointer-events:none;z-index:1}
 .noise{
@@ -58,10 +63,7 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
   border-radius:5px;
   margin-top:4px;
 }
-.sens-label{
-  font-size:12px;letter-spacing:.16em;color:#e8d4ab;
-  white-space:nowrap;
-}
+.sens-label{font-size:12px;letter-spacing:.16em;color:#e8d4ab;white-space:nowrap}
 #sens-slider{
   flex:1;
   -webkit-appearance:none;appearance:none;
@@ -83,12 +85,39 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
   box-shadow:0 0 8px rgba(220,160,90,.55);
   cursor:pointer;
 }
-.sens-value{
-  font-size:12px;color:#c9a878;
-  min-width:48px;text-align:right;
-  font-variant-numeric:tabular-nums;
-}
+.sens-value{font-size:12px;color:#c9a878;min-width:48px;text-align:right;font-variant-numeric:tabular-nums}
 
+/* 角色选择 */
+.role-list{
+  width:100%;max-width:440px;
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;
+  margin-top:4px;
+}
+.role-btn{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  padding:11px 14px;
+  font-family:inherit;text-align:left;color:#e8d4ab;
+  background:rgba(24,16,10,.72);
+  border:1px solid rgba(214,168,96,.28);
+  border-radius:5px;cursor:pointer;
+  transition:transform .15s ease,border-color .15s ease,background .15s ease,box-shadow .15s ease;
+}
+.role-btn:hover{
+  transform:translateY(-1px);
+  background:rgba(46,26,14,.9);
+  border-color:rgba(255,180,90,.6);
+  box-shadow:0 6px 22px rgba(190,80,30,.32);
+}
+.role-btn:active{transform:translateY(0)}
+.role-btn[aria-checked="true"]{
+  border-color:rgba(255,200,120,.85);
+  background:rgba(60,32,16,.92);
+  box-shadow:0 0 0 1px rgba(255,200,120,.5),0 6px 22px rgba(190,80,30,.42);
+}
+.role-btn .role-name{font-size:13px;font-weight:600;letter-spacing:.14em;color:#f0d9a8}
+.role-btn .role-desc{font-size:11px;letter-spacing:.02em;color:#a9947a;line-height:1.45}
+
+/* 难度选择 */
 .difficulty-list{
   width:100%;max-width:440px;
   display:grid;grid-template-columns:1fr;gap:8px;
@@ -132,6 +161,7 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
   border-radius:3px;background:rgba(30,20,12,.6);color:#e6c184;font-family:inherit;
 }
 
+/* HUD */
 .hud{position:fixed;inset:0;z-index:6;pointer-events:none;opacity:0;transition:opacity .3s ease}
 .hud.is-visible{opacity:1}
 .objective{
@@ -157,7 +187,6 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
 .status-badge.rage{color:#ffb28a;border-color:rgba(255,90,30,.55);box-shadow:0 0 22px rgba(255,60,20,.4)}
 .status-badge.rage .status-dot{background:#ff5a1e;box-shadow:0 0 14px #ff5a1e}
 
-/* 隐藏旧的 HTML 准星（现在全部在 canvas 上画） */
 #crosshair{display:none !important}
 
 .message{
@@ -170,14 +199,55 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
 }
 .message.is-visible{opacity:1;transform:translate(-50%,0)}
 
-#ammo-badge{
-  position:fixed;left:18px;bottom:18px;z-index:8;
-  padding:7px 14px;font-size:13px;font-weight:600;letter-spacing:.1em;
-  color:#f0d9a8;background:rgba(10,7,5,.6);
-  border:1px solid rgba(226,182,110,.32);border-radius:999px;
-  pointer-events:none;opacity:0;transition:opacity .25s;
+/* 弹药显示：放在右侧小地图与按键之间 */
+#ammo-counter{
+  position:fixed;
+  right:18px;
+  top: calc(74px + 170px + 24px); /* 小地图下方 */
+  z-index:8;
+  display:flex;flex-direction:column;align-items:flex-end;gap:6px;
+  padding:10px 14px;
+  background:rgba(10,7,5,.65);
+  border:1px solid rgba(226,182,110,.32);
+  border-radius:6px;
+  pointer-events:none;
+  opacity:0;transition:opacity .25s;
+  backdrop-filter:blur(3px);
+}
+#ammo-counter.is-visible{opacity:1}
+#ammo-counter .ammo-dots{
+  display:flex;gap:4px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  max-width:120px;
+}
+#ammo-counter .ammo-dot{
+  width:8px;height:14px;border-radius:2px;
+  background:linear-gradient(180deg,#f0d9a8,#b98a45);
+  box-shadow:0 0 4px rgba(240,180,90,.6);
+  transition:background .2s ease,box-shadow .2s ease;
+}
+#ammo-counter .ammo-dot.empty{
+  background:rgba(60,40,20,.6);
+  box-shadow:none;
+}
+#ammo-counter .ammo-dot.reloading{
+  animation: ammoPulse .5s ease-in-out infinite;
+}
+@keyframes ammoPulse{
+  0%,100%{opacity:.4}
+  50%{opacity:1}
+}
+#ammo-counter .ammo-text{
+  font-size:12px;font-weight:600;letter-spacing:.1em;
+  color:#f0d9a8;
+  font-variant-numeric:tabular-nums;
+}
+#ammo-counter .ammo-text.reloading{
+  color:#ffb28a;
 }
 
+/* 移动端触屏 */
 .mobile-controls{position:fixed;inset:0;display:none;pointer-events:none;z-index:7}
 .mobile-controls.is-visible{display:block}
 .mobile-controls button{
@@ -201,6 +271,7 @@ h2{font-size:clamp(22px,5vw,36px);letter-spacing:.18em;color:#e9d3a4}
 .look-pad [data-control="turnRight"]{right:88px;bottom:32px}
 .look-pad [data-control="run"]{right:158px;bottom:72px}
 .look-pad [data-control="fire"]{right:18px;bottom:72px;font-size:18px}
+.look-pad [data-control="reload"]{right:18px;bottom:144px;font-size:16px}
 .look-pad [data-control="knife"]{right:158px;bottom:140px;font-size:18px}
 
 .asset-error{

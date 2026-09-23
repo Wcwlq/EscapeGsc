@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#080604" />
-    <meta name="description" content="恐怖少帅：随机迷宫里先找枪，再找刀，把刀插进铁笼的锁里，撑过 30 秒。" />
+    <meta name="description" content="恐怖少帅：随机迷宫，先找枪再找刀，把刀插进铁笼的锁里，撑过 30 秒。" />
     <title>恐怖少帅</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -30,6 +30,17 @@
             <span id="sens-value" class="sens-value">1.00x</span>
           </div>
 
+          <div class="role-list" role="radiogroup" aria-label="角色选择">
+            <button class="role-btn" data-role="escaper" role="radio" aria-checked="true" type="button">
+              <span class="role-name">逃离者模式</span>
+              <span class="role-desc">先找枪，再找刀，撑过 30 秒钻铁笼。</span>
+            </button>
+            <button class="role-btn" data-role="marshal" role="radio" aria-checked="false" type="button">
+              <span class="role-name">少帅模式</span>
+              <span class="role-desc">追捕逃离者。只能走他走过的路。</span>
+            </button>
+          </div>
+
           <div class="difficulty-list" role="radiogroup" aria-label="难度选择">
             <button class="difficulty-btn" data-difficulty="peace" role="radio" aria-checked="false" type="button">
               <span class="diff-name">和平模式</span>
@@ -45,11 +56,11 @@
             </button>
             <button class="difficulty-btn" data-difficulty="nightmare" role="radio" aria-checked="false" type="button">
               <span class="diff-name">噩梦模式</span>
-              <span class="diff-desc">全程没有视野 · 少帅远处出生</span>
+              <span class="diff-desc">没有感知 · 少帅模式也不显示逃离者位置</span>
             </button>
             <button class="difficulty-btn" data-difficulty="hell" role="radio" aria-checked="false" type="button">
               <span class="diff-name">地狱模式</span>
-              <span class="diff-desc">两个少帅 · 提前 5 格感知</span>
+              <span class="diff-desc">两个少帅 · 少帅模式也不显示逃离者位置</span>
             </button>
           </div>
 
@@ -58,6 +69,7 @@
             <span><kbd>鼠标</kbd> 转向 / 瞄准</span>
             <span><kbd>Shift</kbd> 奔跑</span>
             <span><kbd>左键</kbd> 开枪</span>
+            <span><kbd>F</kbd> 换弹</span>
             <span><kbd>Q</kbd> 插刀</span>
             <span><kbd>Tab</kbd> 地图</span>
           </div>
@@ -102,6 +114,7 @@
           <button data-control="run" class="run-button" aria-label="奔跑">跑</button>
           <button data-control="turnRight" aria-label="向右转">↷</button>
           <button data-control="fire" aria-label="开枪">🔫</button>
+          <button data-control="reload" aria-label="换弹">⟳</button>
           <button data-control="knife" aria-label="插刀">🗡</button>
         </div>
       </div>
