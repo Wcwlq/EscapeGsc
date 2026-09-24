@@ -18,18 +18,43 @@
   const resultTitle = document.getElementById("result-title");
   const resultCopy = document.getElementById("result-copy");
   const resultImage = document.getElementById("result-image");
+  const resultStats = document.getElementById("result-stats");
   const loadingError = document.getElementById("loading-error");
   const sensSlider = document.getElementById("sens-slider");
   const sensValue = document.getElementById("sens-value");
 
+  const multiplayerBtn = document.getElementById("multiplayer-btn");
+  const lobby = document.getElementById("lobby");
+  const setup = document.getElementById("setup");
+  const createRoomBtn = document.getElementById("create-room-btn");
+  const joinRoomBtn = document.getElementById("join-room-btn");
+  const roomInput = document.getElementById("room-input");
+  const roomInfo = document.getElementById("room-info");
+  const roomCodeEl = document.getElementById("room-code");
+  const copyRoomBtn = document.getElementById("copy-room-btn");
+  const lobbyStatus = document.getElementById("lobby-status");
+  const lobbyStatusJoin = document.getElementById("lobby-status-join");
+  const lobbyBackBtn = document.getElementById("lobby-back-btn");
+  const setupRoomCode = document.getElementById("setup-room-code");
+  const setupStatus = document.getElementById("setup-status");
+  const setupReadyBtn = document.getElementById("setup-ready-btn");
+  const setupLeaveBtn = document.getElementById("setup-leave-btn");
+
+  // v2.2 剧情系统 DOM
+  const cutscene = document.getElementById("cutscene");
+  const cutsceneTitle = document.getElementById("cutscene-title");
+  const cutsceneText = document.getElementById("cutscene-text");
+  const subtitle = document.getElementById("subtitle");
+  const fragmentCounter = document.getElementById("fragment-counter");
+  const fragmentCount = document.getElementById("fragment-count");
+
   crosshair.style.display = "none";
 
-  // 弹药显示元素
   const ammoCounter = document.createElement("div");
   ammoCounter.id = "ammo-counter";
   ammoCounter.innerHTML = `
     <div class="ammo-dots"></div>
-    <div class="ammo-text">0 / 10</div>
+    <div class="ammo-text">0 / 14</div>
   `;
   document.getElementById("game-shell").appendChild(ammoCounter);
 
@@ -81,16 +106,14 @@
   const WALL_SCARE_MIN_INTERVAL = 1;
   const WALL_SCARE_MAX_INTERVAL = 4;
 
-  // 【新增】弹匣 / 换弹
-  const MAX_AMMO = 10;
+  const MAX_AMMO = 14;
   const RELOAD_TIME = 1.5;
-  const DUD_CHANCE = 0.65;         // 换弹时触发哑弹的概率
+  const DUD_CHANCE = 0.65;
   const DUD_MIN_COUNT = 1;
   const DUD_MAX_COUNT = 3;
-  const LAST_BULLET_STUN = 3.0;    // 最后一发造成的总眩晕（基础 1 + 额外 2）
+  const LAST_BULLET_STUN = 3.0;
 
-  // 【新增】击退距离减少
-  const KNOCKBACK_BASE = 2.5;      // 原来 4.2
+  const KNOCKBACK_BASE = 2.5;
 
   // ============================ 难度 ============================
   const DIFFICULTIES = {
@@ -102,11 +125,9 @@
   };
   let currentDifficulty = "easy";
 
-  // ============================ 角色 ============================
   let currentRole = "escaper";
   const escaperTrail = new Set();
 
-  // ============================ 状态 ============================
   const player = { x: 1.5, y: 1.5, angle: 0, pitch: 0, walkPhase: 0 };
   const input = Object.create(null);
   const zBuffer = [];
@@ -147,7 +168,6 @@
   let escaperVisitedGun = false;
   let escaperVisitedKey = false;
 
-  // 【新增】弹匣系统
   let magazine = [];
   let isReloading = false;
   let reloadTimer = 0;
@@ -198,6 +218,76 @@
   let wallTextureNormal = null;
   let wallTextureEvil = null;
 
+  let multiplayer = false;
+  let localRole = "escaper";
+  let remoteRole = "marshal";
+  let remotePlayer = { x: 0, y: 0, angle: 0, ready: false };
+  let localChoice = { role: null, difficulty: null, ready: false };
+  let remoteChoice = { role: null, difficulty: null, ready: false };
+  let netSendTimer = 0;
+  let gameSeed = 0;
+  let gameEnded = false;
+
+  // ===== v2: 每日挑战 / 计时 / 剧情 =====
+  let isDailyChallenge = false;
+  let challengeMode = "nightmare";
+  let gameStartTime = 0;
+  let dailyDay = "";
+  let dailySeed = 0;
+  let submittedThisRun = false;
+
+  // ===== v2.2: 剧情系统状态 =====
+  let cutsceneTimer = 0;
+  let subtitleTimer = 0;
+  let fragments = [];
+  let fragmentsPicked = 0;
+  let countdownVoiceTimer = 0;
+  let countdownVoiceIndex = 0;
+  let wallVoiceCooldown = 0;
+
+  function getDailySeed(dateStr) {
+    let h = 2166136261;
+    for (let i = 0; i < dateStr.length; i++) {
+      h ^= dateStr.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return Math.abs(h) % 1000000000;
+  }
+  function todayStr() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  const menuQuoteEl = document.getElementById("menu-quote");
+  if (menuQuoteEl && window.Lore) menuQuoteEl.textContent = window.Lore.MENU_QUOTE;
+
+  const topBar = document.getElementById("top-bar");
+  const accountBtn = document.getElementById("account-btn");
+  const accountLabel = document.getElementById("account-label");
+  const leaderboardBtn = document.getElementById("leaderboard-btn");
+  const authModal = document.getElementById("auth-modal");
+  const authCloseBtn = document.getElementById("auth-close-btn");
+  const authTabs = document.querySelectorAll("[data-auth-tab]");
+  const authUsername = document.getElementById("auth-username");
+  const authPassword = document.getElementById("auth-password");
+  const authSubmit = document.getElementById("auth-submit");
+  const authError = document.getElementById("auth-error");
+  const authLogoutBtn = document.getElementById("auth-logout-btn");
+  const lbModal = document.getElementById("lb-modal");
+  const lbCloseBtn = document.getElementById("lb-close-btn");
+  const lbContainer = document.getElementById("lb-container");
+  const lbDate = document.getElementById("lb-date");
+  const lbTabs = document.querySelectorAll("[data-lb-mode]");
+  const dailyInfo = document.getElementById("daily-info");
+  const dailyNightmareBtn = document.getElementById("daily-nightmare-btn");
+  const dailyHellBtn = document.getElementById("daily-hell-btn");
+  const customSeedInput = document.getElementById("custom-seed-input");
+  const customSeedMode = document.getElementById("custom-seed-mode");
+  const customSeedBtn = document.getElementById("custom-seed-btn");
+
   const doubaoImage = new Image();
   doubaoImage.src = "assets/doubao.jpg";
   doubaoImage.addEventListener("error", () => { loadingError.hidden = false; });
@@ -218,7 +308,17 @@
   voices.victory.loop = true;
   voices.caught.loop = true;
 
-  // ============================ 墙面纹理（两份） ============================
+  function mulberry32(seed) {
+    let t = seed >>> 0;
+    return function () {
+      t += 0x6D2B79F5;
+      let x = t;
+      x = Math.imul(x ^ (x >>> 15), x | 1);
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   function buildTextureFrom(img) {
     const size = WALL_TEX_SIZE;
     const c = document.createElement("canvas");
@@ -264,11 +364,10 @@
   }
 
   function activeWallTexture() {
-    if (currentRole === "marshal") return wallTextureEvil || wallTextureNormal;
-    return wallTextureNormal;
+    if (currentRole === "marshal") return wallTextureNormal;
+    return wallTextureEvil || wallTextureNormal;
   }
 
-  // ============================ 工具 ============================
   function resizeCanvas() {
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.35);
     canvas.width = Math.min(1100, Math.max(480, Math.round(window.innerWidth * pixelRatio)));
@@ -300,10 +399,10 @@
            !isWall(x + radius, y + radius);
   }
 
-  // 【新增】少帅模式只能走青色轨迹区域
   function canPlayerMoveTo(x, y, radius = 0.18) {
     if (!canMoveTo(x, y, radius)) return false;
-    if (currentRole === "marshal") {
+    const role = multiplayer ? localRole : currentRole;
+    if (role === "marshal") {
       const gx = Math.floor(x);
       const gy = Math.floor(y);
       if (!escaperTrail.has(`${gx},${gy}`)) return false;
@@ -311,13 +410,11 @@
     return true;
   }
 
-  // 【新增】在少帅模式开局时为逃离者轨迹播种：
-  // 以 (cx, cy) 为中心，把半径 radius 内连通的可行走格子标记为“已走过”
   function seedEscaperTrail(cx, cy, radius) {
     const sgx = Math.floor(cx);
     const sgy = Math.floor(cy);
     if (sgx < 0 || sgx >= MAP_W || sgy < 0 || sgy >= MAP_H) return;
-    if (map[sgy]?.[sgx] !== 0) return;
+    if (!map[sgy] || map[sgy][sgx] !== 0) return;
 
     escaperTrail.add(`${sgx},${sgy}`);
     const seen = new Set([`${sgx},${sgy}`]);
@@ -377,7 +474,6 @@
     return { x: cx, y: cy };
   }
 
-  // 【改动】弹药 UI 显示：子弹圆点 + 数字
   function updateAmmoUI() {
     if (currentRole === "marshal" || !hasGun) {
       ammoCounter.classList.remove("is-visible");
@@ -410,13 +506,10 @@
   function getFov() { return BASE_FOV; }
   function currentPreset() { return DIFFICULTIES[currentDifficulty]; }
 
-  // ============================ 弹匣系统 ============================
   function generateMagazine() {
     const mag = new Array(MAX_AMMO).fill(true);
-    // 概率触发哑弹
     if (Math.random() < DUD_CHANCE) {
       const count = DUD_MIN_COUNT + Math.floor(Math.random() * (DUD_MAX_COUNT - DUD_MIN_COUNT + 1));
-      // 随机位置设为哑弹
       const indices = new Set();
       while (indices.size < count && indices.size < MAX_AMMO) {
         indices.add(Math.floor(Math.random() * MAX_AMMO));
@@ -431,7 +524,7 @@
     if (currentRole !== "escaper") return;
     if (!hasGun) return;
     if (isReloading) return;
-    if (magazine.length >= MAX_AMMO) return;  // 弹匣已满
+    if (magazine.length >= MAX_AMMO) return;
     isReloading = true;
     reloadTimer = RELOAD_TIME;
     triggerHeld = false;
@@ -454,7 +547,6 @@
     }
   }
 
-  // ============================ 地图生成 ============================
   function bfsDistances(grid, sx, sy) {
     const dist = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(-1));
     if (grid[sy] === undefined || grid[sy][sx] !== 0) return dist;
@@ -498,7 +590,11 @@
     return dist;
   }
 
-  function generateLevel() {
+  function generateLevel(seed) {
+    const rand = (typeof seed === "number" && isFinite(seed))
+      ? mulberry32(seed)
+      : Math.random;
+
     const grid = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(1));
 
     const visited = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(false));
@@ -517,7 +613,7 @@
         }
       }
       if (!opts.length) { stack.pop(); continue; }
-      const [nx, ny, dx, dy] = opts[Math.floor(Math.random() * opts.length)];
+      const [nx, ny, dx, dy] = opts[Math.floor(rand() * opts.length)];
       grid[y + dy / 2][x + dx / 2] = 0;
       grid[ny][nx] = 0;
       visited[ny][nx] = true;
@@ -526,8 +622,8 @@
 
     const extra = Math.floor(MAP_W * MAP_H * 0.055);
     for (let i = 0; i < extra; i++) {
-      const x = 1 + Math.floor(Math.random() * (MAP_W - 2));
-      const y = 1 + Math.floor(Math.random() * (MAP_H - 2));
+      const x = 1 + Math.floor(rand() * (MAP_W - 2));
+      const y = 1 + Math.floor(rand() * (MAP_H - 2));
       if (grid[y][x] !== 1) continue;
       const h = grid[y][x - 1] === 0 && grid[y][x + 1] === 0;
       const v = grid[y - 1][x] === 0 && grid[y + 1][x] === 0;
@@ -536,10 +632,10 @@
 
     const roomCount = 5;
     for (let r = 0; r < roomCount; r++) {
-      const rw = 2 + Math.floor(Math.random() * 3);
-      const rh = 2 + Math.floor(Math.random() * 3);
-      const rx = 1 + Math.floor(Math.random() * (MAP_W - 2 - rw));
-      const ry = 1 + Math.floor(Math.random() * (MAP_H - 2 - rh));
+      const rw = 2 + Math.floor(rand() * 3);
+      const rh = 2 + Math.floor(rand() * 3);
+      const rx = 1 + Math.floor(rand() * (MAP_W - 2 - rw));
+      const ry = 1 + Math.floor(rand() * (MAP_H - 2 - rh));
       for (let y = ry; y < ry + rh; y++) {
         for (let x = rx; x < rx + rw; x++) {
           if (x > 0 && x < MAP_W - 1 && y > 0 && y < MAP_H - 1) grid[y][x] = 0;
@@ -572,7 +668,7 @@
     const pick = (lo, hi) => {
       const a = Math.floor(n * lo);
       const b = Math.max(a + 1, Math.floor(n * hi));
-      return others[a + Math.floor(Math.random() * (b - a))];
+      return others[a + Math.floor(rand() * (b - a))];
     };
 
     const gunC     = pick(0.08, 0.28);
@@ -589,7 +685,6 @@
     };
   }
 
-  // ============================ 音频 ============================
   function initAudio() {
     if (!audio) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -865,12 +960,10 @@
     osc.start(t); osc.stop(t + 0.16);
   }
 
-  // 【新增】换弹音效：咔嗒 + 弹匣拔出 + 弹匣插入 + 咔嗒
   function playReloadSound() {
     if (!audio) return;
     const t = audio.currentTime;
 
-    // 1. 弹匣释放咔嗒
     {
       const src = audio.createBufferSource();
       src.buffer = makeNoiseBuffer(0.04, p => Math.pow(1 - p, 3));
@@ -882,7 +975,6 @@
       src.connect(hp).connect(g).connect(audio.destination);
       src.start(t); src.stop(t + 0.06);
     }
-    // 2. 弹匣拔出的金属摩擦
     {
       const src = audio.createBufferSource();
       src.buffer = makeNoiseBuffer(0.28, p => Math.sin(Math.PI * p));
@@ -895,7 +987,6 @@
       src.connect(bp).connect(g).connect(audio.destination);
       src.start(t + 0.08); src.stop(t + 0.4);
     }
-    // 3. 弹匣插入
     {
       const src = audio.createBufferSource();
       src.buffer = makeNoiseBuffer(0.3, p => Math.sin(Math.PI * p));
@@ -908,7 +999,6 @@
       src.connect(bp).connect(g).connect(audio.destination);
       src.start(t + 0.85); src.stop(t + 1.25);
     }
-    // 4. 弹匣锁定咔嗒
     {
       const src = audio.createBufferSource();
       src.buffer = makeNoiseBuffer(0.045, p => Math.pow(1 - p, 4));
@@ -1009,7 +1099,6 @@
     } catch (e) {}
   }
 
-  // ============================ 敌人对象 ============================
   function createEnemy(x, y, extraDelay = 0) {
     return {
       x, y,
@@ -1020,11 +1109,11 @@
       wanderTarget: null,
       aiType: "shaoshuai",
       lastX: x, lastY: y,
-      stuckTimer: 0
+      stuckTimer: 0,
+      isRemote: false
     };
   }
 
-  // ============================ 恐怖装饰 ============================
   function spawnBat() {
     const cands = [];
     for (let y = 1; y < MAP_H - 1; y++) {
@@ -1143,6 +1232,16 @@
     }
     if (Math.random() < 0.5) playWhisper();
     shake = Math.max(shake, 1.1);
+
+    // v2.2: 幻象独白（有冷却，避免刷屏）
+    if (state === "playing" && wallVoiceCooldown <= 0) {
+      wallVoiceCooldown = 6 + Math.random() * 5;
+      const L = window.Lore;
+      if (L) {
+        const lines = isMarshalView() ? L.WALL_MARSHAL : L.WALL_ESCAPER;
+        if (Math.random() < 0.55) showSubtitle(L.pick(lines), 2200);
+      }
+    }
   }
 
   function updateWallScares(dt) {
@@ -1163,6 +1262,7 @@
 
   function updateScares(dt) {
     wallNearbyBurst = Math.max(0, wallNearbyBurst - dt * WALL_NEARBY_BURST_DECAY);
+    if (wallVoiceCooldown > 0) wallVoiceCooldown = Math.max(0, wallVoiceCooldown - dt);
 
     batSpawnTimer -= dt;
     if (batSpawnTimer <= 0) {
@@ -1266,11 +1366,16 @@
     }
   }
 
-  // ============================ 流程 ============================
-  function resetGame() {
+  function resetGame(seed) {
     stopAllVoices();
     stopAmbientAudio();
-    const level = generateLevel();
+
+    gameEnded = false;
+    gameSeed = (typeof seed === "number" && isFinite(seed))
+      ? seed
+      : Math.floor(Math.random() * 1e9);
+
+    const level = generateLevel(gameSeed);
     map = level.map;
     exitCell = level.exitCell;
     gunCellRef = level.gunCell;
@@ -1296,39 +1401,81 @@
     escaperVisitedGun = false;
     escaperVisitedKey = false;
 
-    // 【新增】重置弹匣系统
     magazine = [];
     isReloading = false;
     reloadTimer = 0;
 
-    if (currentRole === "marshal") {
-      const spawn = findWalkableNear(player.x + 0.7, player.y + 0.7, 0.16);
-      const e = createEnemy(spawn.x, spawn.y, 0);
-      e.aiType = "escaper";
-      enemies.push(e);
-      graceTimer = 0;
-      playerFrozenTimer = START_GRACE_DURATION;
-      escapeGraceTimer = 1.0;
+    remotePlayer.ready = false;
+    remotePlayer.x = level.start.x;
+    remotePlayer.y = level.start.y;
+    remotePlayer.angle = 0;
 
-      // 【新增】播种轨迹：
-      // 1) 以逃离者出生点为圆心、半径 2 的连通区域（保证少帅开局能挪动）
-      // 2) 少帅自己脚下的格子（防止极端地图下少帅出生在合法区域之外）
-      seedEscaperTrail(e.x, e.y, 2);
-      seedEscaperTrail(player.x, player.y, 1);
-    } else {
-      if (currentDifficulty === "hell") {
-        enemies.push(createEnemy(level.enemyCell.x + 0.5, level.enemyCell.y + 0.5, 0));
-        enemies.push(createEnemy(level.enemyCell2.x + 0.5, level.enemyCell2.y + 0.5, 0));
-        graceTimer = 0;
-      } else if (currentDifficulty === "nightmare") {
-        enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
-        graceTimer = START_GRACE_DURATION;
+    if (multiplayer) {
+      currentRole = localRole;
+
+      if (localRole === "escaper") {
+        const safe = findWalkableNear(level.start.x + 0.15, level.start.y + 0.15, 0.16);
+        player.x = safe.x;
+        player.y = safe.y;
       } else {
-        enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
-        if (preset.enemyCount >= 2) {
-          enemies.push(createEnemy(player.x - 0.08, player.y - 0.08, 0));
+        const safe = findWalkableNear(level.start.x - 0.15, level.start.y - 0.15, 0.16);
+        player.x = safe.x;
+        player.y = safe.y;
+      }
+
+      const remote = createEnemy(1000, 1000, 0);
+      remote.isRemote = true;
+      remote.aiType = "remote";
+      enemies.push(remote);
+
+      if (localRole === "escaper") {
+        seedEscaperTrail(player.x, player.y, 2);
+        for (const key of escaperTrail) {
+          const [x, y] = key.split(",").map(Number);
+          Net.send("trail", { gx: x, gy: y });
         }
-        graceTimer = START_GRACE_DURATION;
+      } else {
+        seedEscaperTrail(player.x, player.y, 1);
+      }
+
+      graceTimer = 0;
+      playerFrozenTimer = 0;
+      escapeGraceTimer = 0;
+
+      if (localRole === "escaper") {
+        objectiveText.textContent = "先找到那把枪";
+        statusText.textContent = "少帅正在寻找你";
+      } else {
+        objectiveText.textContent = "追捕逃离者";
+        statusText.textContent = "逃离者正在逃跑";
+      }
+    } else {
+      if (currentRole === "marshal") {
+        const spawn = findWalkableNear(player.x + 0.7, player.y + 0.7, 0.16);
+        const e = createEnemy(spawn.x, spawn.y, 0);
+        e.aiType = "escaper";
+        enemies.push(e);
+        graceTimer = 0;
+        playerFrozenTimer = START_GRACE_DURATION;
+        escapeGraceTimer = 1.0;
+
+        seedEscaperTrail(e.x, e.y, 2);
+        seedEscaperTrail(player.x, player.y, 1);
+      } else {
+        if (currentDifficulty === "hell") {
+          enemies.push(createEnemy(level.enemyCell.x + 0.5, level.enemyCell.y + 0.5, 0));
+          enemies.push(createEnemy(level.enemyCell2.x + 0.5, level.enemyCell2.y + 0.5, 0));
+          graceTimer = 0;
+        } else if (currentDifficulty === "nightmare") {
+          enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
+          graceTimer = START_GRACE_DURATION;
+        } else {
+          enemies.push(createEnemy(player.x + 0.08, player.y + 0.08, 0));
+          if (preset.enemyCount >= 2) {
+            enemies.push(createEnemy(player.x - 0.08, player.y - 0.08, 0));
+          }
+          graceTimer = START_GRACE_DURATION;
+        }
       }
     }
 
@@ -1372,17 +1519,27 @@
 
     casings.length = 0;
 
+    // v2.2: 剧情系统
+    fragmentsPicked = 0;
+    countdownVoiceTimer = 0;
+    countdownVoiceIndex = 0;
+    wallVoiceCooldown = 0;
+    hideSubtitle();
+    spawnFragments();
+
     lockState = "idle";
     lockTimer = 0;
     doorOpened = false;
     shake = 0;
 
-    if (currentRole === "marshal") {
-      objectiveText.textContent = "抓住逃离者！";
-      statusText.textContent = `冻结 ${START_GRACE_DURATION}s · 逃离者正在逃跑`;
-    } else {
-      objectiveText.textContent = "先找到那把枪";
-      statusText.textContent = "少帅正在寻找你";
+    if (!multiplayer) {
+      if (currentRole === "marshal") {
+        objectiveText.textContent = "抓住逃离者！";
+        statusText.textContent = `冻结 ${START_GRACE_DURATION}s · 逃离者正在逃跑`;
+      } else {
+        objectiveText.textContent = "先找到那把枪";
+        statusText.textContent = "少帅正在寻找你";
+      }
     }
     statusBadge.classList.remove("danger");
     statusBadge.classList.remove("rage");
@@ -1391,65 +1548,167 @@
     markExploredAroundPlayer();
   }
 
-  function startGame() {
-    resetGame();
+  function startGame(seed) {
+    resetGame(seed);
+    gameStartTime = performance.now();
+    submittedThisRun = false;
     state = "playing";
     menu.classList.remove("is-visible");
+    lobby.classList.remove("is-visible");
+    setup.classList.remove("is-visible");
     result.classList.remove("is-visible");
     hud.classList.add("is-visible");
     crosshair.classList.add("is-visible");
     mobileControls.classList.add("is-visible");
+    if (fragmentCounter && fragments.length > 0 && !multiplayer) {
+      fragmentCounter.hidden = false;
+    }
     initAudio();
     primeVoiceAudio();
     startAmbientAudio();
     if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
       canvas.requestPointerLock?.();
     }
-    if (currentRole === "marshal") {
-      showMessage(`少帅模式 · 5 秒后开始追，别让他跑掉！`, 3400);
+
+    // v2.2: 开局独白
+    playIntroCutscene();
+
+    if (multiplayer) {
+      if (localRole === "escaper") {
+        showMessage("你是小锦 · 找枪 → 找刀 → 插锁 → 撑 30 秒", 4200);
+      } else {
+        showMessage("你是少帅 · 顺着红色的路径追上去！", 4200);
+      }
+    } else if (isDailyChallenge) {
+      const label = challengeMode === "nightmare" ? "每日挑战 · 难度 2 · 噩梦" : "每日挑战 · 难度 1 · 地狱";
+      window.setTimeout(() => showMessage(`${label} · 种子 ${dailySeed}`, 3400), 3600);
+    } else if (currentRole === "marshal") {
+      window.setTimeout(() => showMessage(`少帅模式 · 5 秒后开始追，别让他跑掉！`, 3400), 3600);
     } else if (currentDifficulty === "hell") {
-      showMessage(`地狱模式 · 两个少帅正在远处逼近`, 3400);
+      window.setTimeout(() => showMessage(`地狱模式 · 两个少帅正在远处逼近`, 3400), 3600);
     } else if (currentDifficulty === "nightmare") {
-      showMessage(`噩梦模式 · 先找枪，再找刀`, 2800);
+      window.setTimeout(() => showMessage(`噩梦模式 · 先找枪，再找刀`, 2800), 3600);
     } else {
-      showMessage(`少帅就在你身后！5 秒内快跑！`, 4500);
+      window.setTimeout(() => showMessage(`少帅就在你身后！5 秒内快跑！`, 4500), 3600);
     }
   }
 
-  function endGame(won) {
-    state = won ? "won" : "lost";
+  function formatDuration(ms) {
+    if (ms == null || !isFinite(ms) || ms < 0) return "—";
+    const s = ms / 1000;
+    const m = Math.floor(s / 60);
+    const sec = s - m * 60;
+    if (m > 0) return `${m}分${sec.toFixed(2)}秒`;
+    return `${sec.toFixed(2)}秒`;
+  }
+
+  function endGame(localWin) {
+    state = localWin ? "won" : "lost";
     hud.classList.remove("is-visible");
     crosshair.classList.remove("is-visible");
     mobileControls.classList.remove("is-visible");
     ammoCounter.classList.remove("is-visible");
+    if (topBar) topBar.style.display = "";
+    if (fragmentCounter) fragmentCounter.hidden = true;
+    if (cutscene) cutscene.classList.remove("is-visible");
+    hideSubtitle();
     triggerHeld = false;
     autoFiring = false;
     isReloading = false;
     document.exitPointerLock?.();
 
-    if (currentRole === "marshal") {
-      resultKicker.textContent = won ? "抓住了" : "逃脱了";
-      resultTitle.textContent = won ? "今晚，你赢了" : "他跑了";
-      resultCopy.textContent = won
-        ? "逃离者被你按在墙角。今晚，他属于你了。"
-        : "逃离者钻进铁笼，反手锁上。栏杆外你站了一整夜。";
-      resultImage.src = won ? "assets/doubao.jpg" : "assets/doubao-normal.png";
-      resultImage.alt = won ? "恐怖的少帅" : "正常的少帅";
-    } else {
-      resultKicker.textContent = won ? "你赢了" : "游戏结束";
-      resultTitle.textContent = won ? "天亮之前" : "他抓到你了";
-      resultCopy.textContent = won
-        ? "你钻进铁笼，反手锁上。少帅在栏杆外站了一整夜。"
-        : "黑暗里传来熟悉的笑声。下一次，别让他靠得太近。";
-      resultImage.src = won ? "assets/doubao-normal.png" : "assets/doubao.jpg";
-      resultImage.alt = won ? "正常的少帅" : "恐怖的少帅";
+    const elapsedMs = performance.now() - gameStartTime;
+
+    if (resultStats) {
+      const durationText = formatDuration(elapsedMs);
+      const modeTag = isDailyChallenge
+        ? (challengeMode === "nightmare" ? "每日挑战 · 难度 2 · 噩梦" : "每日挑战 · 难度 1 · 地狱")
+        : (multiplayer
+            ? (localRole === "marshal" ? "联机 · 少帅" : "联机 · 逃离者")
+            : (currentRole === "marshal" ? "少帅模式" : "逃离者模式"));
+      resultStats.innerHTML =
+        `⏱ 本局时长：<strong>${durationText}</strong>` +
+        `<span class="stats-sep">·</span>` +
+        `🎲 地图种子：<strong>${gameSeed}</strong>` +
+        `<br><span style="color:#8d6a45;font-size:11px;letter-spacing:.14em">${modeTag}</span>`;
     }
 
-    result.classList.toggle("is-win", won);
-    result.classList.toggle("is-loss", !won);
+    if (isDailyChallenge && localWin && currentRole === "escaper" && !submittedThisRun) {
+      submittedThisRun = true;
+      if (window.Account && Account.isLoggedIn()) {
+        Account.submitScore(challengeMode, dailySeed, dailyDay, elapsedMs)
+          .catch((err) => {
+            setTimeout(() => showMessage("成绩提交失败：" + err.message, 3500), 600);
+          });
+      }
+    }
+
+    if (multiplayer) {
+      const iAmMarshal = localRole === "marshal";
+      if (iAmMarshal) {
+        if (localWin) {
+          resultKicker.textContent = "抓住了";
+          resultTitle.textContent = "今晚，你赢了";
+          resultCopy.textContent = "逃离者被你按在墙角。今晚，他属于你了。";
+          resultImage.src = "assets/doubao.jpg";
+          resultImage.alt = "恐怖的少帅";
+        } else {
+          resultKicker.textContent = "逃脱了";
+          resultTitle.textContent = "他跑了";
+          resultCopy.textContent = "逃离者钻进铁笼，反手锁上。栏杆外你站了一整夜。";
+          resultImage.src = "assets/doubao-normal.png";
+          resultImage.alt = "正常的少帅";
+        }
+      } else {
+        if (localWin) {
+          resultKicker.textContent = "你赢了";
+          resultTitle.textContent = "天亮之前";
+          resultCopy.textContent = "你钻进铁笼，反手锁上。少帅在栏杆外站了一整夜。";
+          resultImage.src = "assets/doubao-normal.png";
+          resultImage.alt = "正常的少帅";
+        } else {
+          resultKicker.textContent = "游戏结束";
+          resultTitle.textContent = "他抓到你了";
+          resultCopy.textContent = "黑暗里传来熟悉的笑声。下一次，别让他靠得太近。";
+          resultImage.src = "assets/doubao.jpg";
+          resultImage.alt = "恐怖的少帅";
+        }
+      }
+      result.classList.toggle("is-win", localWin);
+      result.classList.toggle("is-loss", !localWin);
+      result.classList.add("is-visible");
+      stopNearbyVoice();
+      playVoice(localWin ? voices.victory : voices.caught);
+      return;
+    }
+
+    const L = window.Lore;
+    if (currentRole === "marshal") {
+      const end = localWin ? L.ENDING_MARSHAL_WIN : L.ENDING_MARSHAL_LOSE;
+      resultKicker.textContent = end.kicker;
+      resultTitle.textContent = end.title;
+      resultCopy.textContent = end.text;
+      resultImage.src = localWin ? "assets/doubao.jpg" : "assets/doubao-normal.png";
+      resultImage.alt = localWin ? "恐怖的少帅" : "正常的少帅";
+    } else {
+      const end = localWin ? L.ENDING_ESCAPER_WIN : L.ENDING_ESCAPER_LOSE;
+      resultKicker.textContent = end.kicker;
+      resultTitle.textContent = end.title;
+      let text = end.text;
+      if (isDailyChallenge && localWin) {
+        if (window.Account && Account.isLoggedIn()) text += "\n（成绩已提交到排行榜）";
+        else text += "\n（未登录，成绩未记录）";
+      }
+      resultCopy.textContent = text;
+      resultImage.src = localWin ? "assets/doubao-normal.png" : "assets/doubao.jpg";
+      resultImage.alt = localWin ? "正常的少帅" : "恐怖的少帅";
+    }
+
+    result.classList.toggle("is-win", localWin);
+    result.classList.toggle("is-loss", !localWin);
     result.classList.add("is-visible");
     stopNearbyVoice();
-    playVoice(won ? voices.victory : voices.caught);
+    playVoice(localWin ? voices.victory : voices.caught);
   }
 
   function showMessage(text, duration = 1800) {
@@ -1460,11 +1719,105 @@
   }
   function hideMessage() { message.classList.remove("is-visible"); }
 
-  // ============================ 寻路 ============================
+  // ============================ v2.2: 剧情系统 ============================
+  function showCutscene(title, text, duration = 3000) {
+    if (!cutscene) return;
+    cutsceneTitle.textContent = title || "";
+    cutsceneText.textContent = text || "";
+    cutscene.classList.add("is-visible");
+    window.clearTimeout(cutsceneTimer);
+    cutsceneTimer = window.setTimeout(() => {
+      cutscene.classList.remove("is-visible");
+    }, duration);
+  }
+
+  function showSubtitle(text, duration = 2600) {
+    if (!subtitle) return;
+    subtitle.textContent = text;
+    subtitle.classList.add("is-visible");
+    window.clearTimeout(subtitleTimer);
+    subtitleTimer = window.setTimeout(() => {
+      subtitle.classList.remove("is-visible");
+    }, duration);
+  }
+
+  function hideSubtitle() {
+    if (subtitle) subtitle.classList.remove("is-visible");
+  }
+
+  function isMarshalView() {
+    const role = multiplayer ? localRole : currentRole;
+    return role === "marshal";
+  }
+
+  function spawnFragments() {
+    fragments = [];
+    fragmentsPicked = 0;
+    if (!window.Lore) return;
+
+    const cands = [];
+    for (let y = 1; y < MAP_H - 1; y++) {
+      for (let x = 1; x < MAP_W - 1; x++) {
+        if (map[y][x] !== 0) continue;
+        if (x === Math.floor(player.x) && y === Math.floor(player.y)) continue;
+        if (gunCellRef && x === gunCellRef.x && y === gunCellRef.y) continue;
+        if (keyCellRef && x === keyCellRef.x && y === keyCellRef.y) continue;
+        if (x === exitCell.x && y === exitCell.y) continue;
+        cands.push({ x: x + 0.5, y: y + 0.5 });
+      }
+    }
+    for (let i = cands.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cands[i], cands[j]] = [cands[j], cands[i]];
+    }
+    const count = Math.min(10, cands.length);
+    for (let i = 0; i < count; i++) {
+      fragments.push({
+        x: cands[i].x,
+        y: cands[i].y,
+        taken: false,
+        index: i
+      });
+    }
+    if (fragmentCounter) {
+      fragmentCounter.hidden = (count === 0);
+      if (fragmentCount) fragmentCount.textContent = "0";
+    }
+  }
+
+  function checkFragmentPickup() {
+    if (isMarshalView()) return;
+    for (const f of fragments) {
+      if (f.taken) continue;
+      const d = Math.hypot(player.x - f.x, player.y - f.y);
+      if (d < 0.55) {
+        f.taken = true;
+        fragmentsPicked++;
+        if (fragmentCount) fragmentCount.textContent = String(fragmentsPicked);
+        const frag = window.Lore.FRAGMENTS[f.index % window.Lore.FRAGMENTS.length];
+        if (frag) {
+          showCutscene("小洛 · " + frag.title, frag.text, 4200);
+          playTone(760, 0.14, "triangle", 0.06);
+          window.setTimeout(() => playTone(520, 0.28, "triangle", 0.05), 120);
+        }
+      }
+    }
+  }
+
+  function playIntroCutscene() {
+    const L = window.Lore;
+    if (!L) return;
+    if (isMarshalView()) {
+      showCutscene("少帅", L.pick(L.INTRO_MARSHAL), 3600);
+    } else {
+      showCutscene("小锦", L.pick(L.INTRO_ESCAPER), 3600);
+    }
+  }
+
   function findPath(sx, sy, ex, ey) {
     const start = { x: Math.floor(sx), y: Math.floor(sy) };
     const end = { x: Math.floor(ex), y: Math.floor(ey) };
-    if (map[end.y]?.[end.x] !== 0) return [];
+    if (!map[end.y] || map[end.y][end.x] !== 0) return [];
     const queue = [start];
     const visited = new Map([[`${start.x},${start.y}`, null]]);
     let cur = 0;
@@ -1473,7 +1826,7 @@
       if (c.x === end.x && c.y === end.y) break;
       for (const n of [{ x: c.x + 1, y: c.y }, { x: c.x - 1, y: c.y }, { x: c.x, y: c.y + 1 }, { x: c.x, y: c.y - 1 }]) {
         const id = `${n.x},${n.y}`;
-        if (!visited.has(id) && map[n.y]?.[n.x] === 0) { visited.set(id, c); queue.push(n); }
+        if (!visited.has(id) && map[n.y] && map[n.y][n.x] === 0) { visited.set(id, c); queue.push(n); }
       }
     }
     const endId = `${end.x},${end.y}`;
@@ -1521,7 +1874,6 @@
     return null;
   }
 
-  // ============================ 探索 ============================
   function markExploredAroundPlayer() {
     if (currentRole === "marshal") return;
 
@@ -1549,7 +1901,6 @@
     markExploredAroundPlayer();
   }
 
-  // ============================ 扳机 & 开火 ============================
   function pressTrigger() {
     triggerHeld = true;
     triggerHeldSince = performance.now();
@@ -1570,20 +1921,16 @@
   function fireGun(isAuto = false) {
     if (state !== "playing" || !hasGun) return false;
     if (currentRole !== "escaper") return false;
-    if (isReloading) return false;              // 换弹中不能开枪
+    if (isReloading) return false;
     if (gunCooldown > 0) return false;
     if (magazine.length === 0) {
-      // 空弹匣：咔嗒声
       playTone(180, 0.05, "square", 0.04);
       return false;
     }
 
     gunCooldown = isAuto ? (AUTO_FIRE_INTERVAL * 0.9) : SINGLE_FIRE_COOLDOWN;
 
-    // 判断最后一发
     const isLastBullet = (magazine.length === 1);
-
-    // 弹出当前子弹，判断是正常还是哑弹
     const isLive = magazine.pop();
     updateAmmoUI();
 
@@ -1593,7 +1940,6 @@
     shake = Math.max(shake, 2.6 * recoil);
 
     if (isLive) {
-      // 正常子弹：枪口闪光 + 音效 + 命中
       muzzleFlash = 1;
       player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - 0.022 * recoil));
 
@@ -1625,17 +1971,15 @@
           if (d < bestDist) { bestDist = d; best = e; }
         }
       }
-      if (best) {
+      if (best && !best.isRemote) {
         const dx = best.x - player.x, dy = best.y - player.y;
         const d = Math.hypot(dx, dy);
         hitEnemy(best, dx / d, dy / d, isAuto, isLastBullet);
       }
     } else {
-      // 哑弹：没有闪光、没有枪声，只有后坐力和闷响
       shake = Math.max(shake, 2.4);
       player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - 0.014));
       playTone(120, 0.05, "square", 0.05);
-      // 哑弹不发射子弹，没有命中判定
     }
 
     return true;
@@ -1643,7 +1987,6 @@
 
   function hitEnemy(e, ux, uy, isAuto, isLastBullet) {
     const recoil = isAuto ? RECOIL_AUTO : RECOIL_BASE;
-    // 【改动】击退距离减少
     const knockback = KNOCKBACK_BASE * recoil;
     const steps = Math.max(20, Math.floor(24 * recoil));
     for (let i = 0; i < steps; i++) {
@@ -1654,7 +1997,6 @@
     }
     e.path = []; e.repathTimer = 0.5;
 
-    // 【改动】最后一发额外造成 2 秒眩晕
     if (isLastBullet) {
       e.stunTimer = Math.max(e.stunTimer, LAST_BULLET_STUN);
       showMessage(`最后一发！少帅眩晕 ${LAST_BULLET_STUN.toFixed(1)}s`, 1400);
@@ -1762,9 +2104,8 @@
     }
   }
 
-  // ============================ 插刀 ============================
   function tryInsertKnife() {
-    if (currentRole === "marshal") return;
+    if (currentRole !== "escaper") return;
     if (state !== "playing") return;
     if (lockState !== "idle") return;
     if (!hasKey) { showMessage("你需要先找到那把刀", 1400); return; }
@@ -1774,10 +2115,6 @@
     lockState = "inserted";
     lockTimer = LOCK_DURATION;
     hasKey = false;
-    for (const e of enemies) {
-      e.rageLevel += 2;
-      e.repathTimer = 0;
-    }
 
     objectiveText.textContent = `撑过 ${LOCK_DURATION} 秒——少帅彻底疯了`;
     showMessage("刀插进锁孔，铁笼开始绞动……撑住 30 秒！", 3200);
@@ -1785,9 +2122,17 @@
     window.setTimeout(() => playTone(160, 0.9, "square", 0.045), 200);
     rageFlash = 1.2;
     shake = Math.max(shake, 1.6);
+
+    if (multiplayer) {
+      Net.send("lock-start", {});
+    } else {
+      for (const e of enemies) {
+        e.rageLevel += 2;
+        e.repathTimer = 0;
+      }
+    }
   }
 
-  // ============================ 少帅 AI ============================
   function updateSingleEnemyShaoshuai(e, dt, preset) {
     e.stunTimer = Math.max(0, e.stunTimer - dt);
     e.activeTimer -= dt;
@@ -1832,15 +2177,13 @@
     }
   }
 
-  // ============================ 逃离者 AI ============================
   function updateSingleEnemyEscaper(e, dt) {
     e.repathTimer -= dt;
 
     const distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
     const playerThreat = distToPlayer < 7.0;
 
-    // 卡住检测
-    const moved = Math.hypot(e.x - (e.lastX ?? e.x), e.y - (e.lastY ?? e.y));
+    const moved = Math.hypot(e.x - (e.lastX || e.x), e.y - (e.lastY || e.y));
     e.lastX = e.x;
     e.lastY = e.y;
     if (moved < 0.02) {
@@ -1896,9 +2239,9 @@
       }
 
       if (targetX !== null) {
-        let tx = Math.floor(targetX);
-        let ty = Math.floor(targetY);
-        if (map[ty]?.[tx] !== 0) {
+        const tx = Math.floor(targetX);
+        const ty = Math.floor(targetY);
+        if (!map[ty] || map[ty][tx] !== 0) {
           targetX = exitCell.x + 0.5;
           targetY = exitCell.y + 0.5;
         }
@@ -1965,18 +2308,112 @@
     }
 
     if (escapeGraceTimer <= 0 && distToPlayer < 0.5) {
-      endGame(true);
+      endGame(false);
       return;
     }
     const dExit = Math.hypot(e.x - (exitCell.x + 0.5), e.y - (exitCell.y + 0.5));
     if (dExit < 0.65) {
-      endGame(false);
+      endGame(true);
       return;
+    }
+  }
+
+  function updateMultiplayerEnemies(dt) {
+    const preset = currentPreset();
+    const remote = enemies.find(e => e.isRemote);
+    if (!remote) return;
+
+    if (remotePlayer.ready) {
+      remote.x = remotePlayer.x;
+      remote.y = remotePlayer.y;
+    } else {
+      remote.x = 1000;
+      remote.y = 1000;
+    }
+    remote.path = [];
+
+    const d = remotePlayer.ready
+      ? Math.hypot(player.x - remote.x, player.y - remote.y)
+      : Infinity;
+
+    if (localRole === "escaper") {
+      const gx = Math.floor(player.x);
+      const gy = Math.floor(player.y);
+      const key = `${gx},${gy}`;
+      if (!escaperTrail.has(key)) {
+        escaperTrail.add(key);
+        Net.send("trail", { gx, gy });
+      }
+
+      if (!gameEnded && remotePlayer.ready && d < 0.5) {
+        gameEnded = true;
+        Net.send("end", { escaperWon: false });
+        endGame(false);
+        return;
+      }
+
+      if (lockState === "inserted") {
+        lockTimer -= dt;
+        if (lockTimer <= 0) {
+          lockTimer = 0;
+          lockState = "open";
+          map[exitCell.y][exitCell.x] = 0;
+          doorOpened = true;
+          objectiveText.textContent = "铁笼开了——快钻进去！";
+          showMessage("锁开了！", 1600);
+          playTone(118, 0.65, "sawtooth", 0.05);
+          playTone(280, 0.4, "triangle", 0.05);
+          Net.send("lock-open", {});
+        }
+      }
+
+      if (doorOpened && !gameEnded) {
+        const dExit = Math.hypot(player.x - (exitCell.x + 0.5), player.y - (exitCell.y + 0.5));
+        if (dExit < 0.6) {
+          gameEnded = true;
+          Net.send("end", { escaperWon: true });
+          endGame(true);
+          return;
+        }
+      }
+
+      if (d < 4) {
+        statusText.textContent = `少帅就在附近（${d.toFixed(1)} 格）`;
+      } else if (lockState === "inserted") {
+        statusText.textContent = "锁在绞动…";
+      } else {
+        statusText.textContent = "少帅正在寻找你";
+      }
+
+      heartbeatTimer -= dt;
+      if (d < 4 && heartbeatTimer <= 0) {
+        playTone(66, 0.13, "sine", 0.065);
+        window.setTimeout(() => playTone(54, 0.1, "sine", 0.04), 150);
+        heartbeatTimer = Math.max(0.34, d * 0.2);
+      }
+      shake = Math.max(0, (2.45 - d) * 1.35);
+    } else {
+      const detectRange = preset.detectRange;
+      if (detectRange > 0 && remotePlayer.ready && d < detectRange) {
+        statusText.textContent = `逃离者就在附近（${d.toFixed(1)} 格）`;
+      } else {
+        statusText.textContent = lockState === "inserted" ? "锁在绞动…" : "逃离者正在逃跑";
+      }
+      shake = Math.max(0, (2.45 - d) * 1.35);
+    }
+
+    if (remotePlayer.ready) {
+      updateNearbyVoice(d, remote.x, remote.y);
     }
   }
 
   function updateEnemies(dt) {
     const preset = currentPreset();
+
+    if (multiplayer) {
+      updateMultiplayerEnemies(dt);
+      return;
+    }
 
     if (currentRole === "marshal") {
       if (playerFrozenTimer > 0) {
@@ -2067,7 +2504,6 @@
     }
   }
 
-  // ============================ 玩家 ============================
   function updatePlayer(dt) {
     gunCooldown = Math.max(0, gunCooldown - dt);
     muzzleFlash = Math.max(0, muzzleFlash - dt * 6);
@@ -2078,11 +2514,9 @@
     if (hitConfirmTimer > 0) hitConfirmTimer = Math.max(0, hitConfirmTimer - dt);
     if (whiteFlash > 0) whiteFlash = Math.max(0, whiteFlash - dt * 8);
 
-    // 换弹更新
     updateReload(dt);
 
-    // 少帅模式冻结
-    if (currentRole === "marshal" && playerFrozenTimer > 0) {
+    if (currentRole === "marshal" && playerFrozenTimer > 0 && !multiplayer) {
       return;
     }
 
@@ -2095,7 +2529,6 @@
       }
     }
 
-    // 换弹中不能开枪
     if (currentRole === "escaper" && !isReloading && triggerHeld && hasGun && state === "playing") {
       if (!autoFiring) {
         const held = (performance.now() - triggerHeldSince) / 1000;
@@ -2113,11 +2546,9 @@
     const running = input.ShiftLeft || input.ShiftRight || input.run;
     let baseSpeed = running ? RUN_SPEED : MOVE_SPEED;
 
-    // 少帅模式不支持奔跑
     if (currentRole === "marshal") {
       baseSpeed = MOVE_SPEED;
     }
-    // 换弹中移速减半
     if (isReloading) {
       baseSpeed *= 0.5;
     }
@@ -2141,7 +2572,14 @@
     const dy = (Math.sin(player.angle) * fwd + Math.sin(player.angle + Math.PI / 2) * str) * speed;
     movePlayer(dx, dy);
 
-    // 少帅模式：不做任何武器交互
+    if (multiplayer) {
+      netSendTimer -= dt;
+      if (netSendTimer <= 0) {
+        netSendTimer = 1 / 30;
+        Net.send("state", { x: player.x, y: player.y, a: player.angle });
+      }
+    }
+
     if (currentRole === "marshal") return;
 
     if (!hasGun && !gunPicked &&
@@ -2151,9 +2589,14 @@
       magazine = generateMagazine();
       updateAmmoUI();
       objectiveText.textContent = "再找到那把刀";
-      showMessage("捡到手枪，10 发子弹。左键开火，F 换弹", 3200);
+      showMessage("捡到手枪，14 发子弹。左键开火，F 换弹", 3200);
       playTone(520, 0.1, "square", 0.06);
       window.setTimeout(() => playTone(700, 0.12, "square", 0.05), 90);
+      const L = window.Lore;
+      if (L) {
+        const lines = isMarshalView() ? L.PICKUP_GUN_MARSHAL : L.PICKUP_GUN_ESCAPER;
+        showSubtitle(L.pick(lines), 3200);
+      }
     }
 
     if (!hasKey && lockState === "idle" && Math.hypot(player.x - keyPosition.x, player.y - keyPosition.y) < 0.55) {
@@ -2165,35 +2608,56 @@
         showMessage("你拿到了刀……他也听见了。狂暴开始。", 2800);
         playTone(860, 0.14, "triangle", 0.08);
         window.setTimeout(() => playTone(440, 0.34, "triangle", 0.06), 120);
-        for (const e of enemies) {
-          e.repathTimer = 0;
-          if (e.rageLevel < 3) e.rageLevel = 3;
+        if (!multiplayer) {
+          for (const e of enemies) {
+            e.repathTimer = 0;
+            if (e.rageLevel < 3) e.rageLevel = 3;
+          }
         }
         rageFlash = Math.max(rageFlash, 0.7);
+        const L2 = window.Lore;
+        if (L2) {
+          const lines = isMarshalView() ? L2.PICKUP_KNIFE_MARSHAL : L2.PICKUP_KNIFE_ESCAPER;
+          window.setTimeout(() => showSubtitle(L2.pick(lines), 3400), 2600);
+        }
       }
     }
 
-    if (lockState === "inserted") {
-      lockTimer -= dt;
-      if (lockTimer <= 0) {
-        lockTimer = 0;
-        lockState = "open";
-        map[exitCell.y][exitCell.x] = 0;
-        doorOpened = true;
-        objectiveText.textContent = "铁笼开了——快钻进去！";
-        showMessage("锁开了！", 1600);
-        playTone(118, 0.65, "sawtooth", 0.05);
-        playTone(280, 0.4, "triangle", 0.05);
-      }
-    }
+    if (!multiplayer) {
+      if (lockState === "inserted") {
+        lockTimer -= dt;
 
-    if (doorOpened) {
-      const dExit = Math.hypot(player.x - (exitCell.x + 0.5), player.y - (exitCell.y + 0.5));
-      if (dExit < 0.6) endGame(true);
+        countdownVoiceTimer -= dt;
+        if (countdownVoiceTimer <= 0) {
+          countdownVoiceTimer = 5;
+          const L = window.Lore;
+          if (L) {
+            const lines = isMarshalView() ? L.COUNTDOWN_MARSHAL : L.COUNTDOWN_ESCAPER;
+            const idx = countdownVoiceIndex % lines.length;
+            showSubtitle(lines[idx], 2400);
+            countdownVoiceIndex++;
+          }
+        }
+
+        if (lockTimer <= 0) {
+          lockTimer = 0;
+          lockState = "open";
+          map[exitCell.y][exitCell.x] = 0;
+          doorOpened = true;
+          objectiveText.textContent = "铁笼开了——快钻进去！";
+          showMessage("锁开了！", 1600);
+          playTone(118, 0.65, "sawtooth", 0.05);
+          playTone(280, 0.4, "triangle", 0.05);
+        }
+      }
+
+      if (doorOpened) {
+        const dExit = Math.hypot(player.x - (exitCell.x + 0.5), player.y - (exitCell.y + 0.5));
+        if (dExit < 0.6) endGame(true);
+      }
     }
   }
 
-  // ============================ 渲染 ============================
   function castRay(angle) {
     const dx = Math.cos(angle), dy = Math.sin(angle);
     let mx = Math.floor(player.x), my = Math.floor(player.y);
@@ -2440,7 +2904,7 @@
     const focal = W / (2 * Math.tan(fov / 2));
     const sx = W / 2 + Math.tan(rel) * focal;
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-    if ((zBuffer[col] ?? Infinity) < corr - 0.2) return;
+    if ((zBuffer[col] || Infinity) < corr - 0.2) return;
 
     const scale = H / corr;
     const spriteH = Math.min(H * 2.2, scale * 0.95);
@@ -2472,7 +2936,7 @@
       const sx = W / 2 + Math.tan(rel) * focal;
       const sy = horizonY + (0.5 - b.z) * (H / corr);
       const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-      if ((zBuffer[col] ?? Infinity) < corr - 0.15) continue;
+      if ((zBuffer[col] || Infinity) < corr - 0.15) continue;
       const size = Math.min(H * 1.1, (H / corr) * 0.55);
       const alpha = b.state === "idle" ? 0.55 : Math.max(0.35, 1 - dist / 15);
       drawBatSprite(sx, sy, size, b.phase, alpha);
@@ -2488,7 +2952,7 @@
       if (corr <= 0.05) continue;
       const sx = W / 2 + Math.tan(rel) * focal;
       const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-      if ((zBuffer[col] ?? Infinity) < corr - 0.15) continue;
+      if ((zBuffer[col] || Infinity) < corr - 0.15) continue;
       const t = s.life / s.maxLife;
       let alpha;
       if (t < 0.15) alpha = t / 0.15;
@@ -2558,7 +3022,6 @@
     ctx.restore();
   }
 
-  // 【新增】少帅模式下的青色轨迹地面（红色渲染）
   function renderMarshalTrailGround(horizonY, focal) {
     const W = canvas.width, H = canvas.height;
     const fov = getFov();
@@ -2579,8 +3042,7 @@
     tiles.sort((a, b) => b.dist - a.dist);
 
     ctx.save();
-    for (const { gx, gy, dist } of tiles) {
-      // 投影 4 个角
+    for (const { gx, gy } of tiles) {
       const corners = [
         [gx, gy], [gx + 1, gy], [gx + 1, gy + 1], [gx, gy + 1]
       ];
@@ -2600,13 +3062,12 @@
       }
       if (!valid) continue;
 
-      // 检查 z-buffer 遮挡（用瓦片中心列）
       const cx = gx + 0.5, cy2 = gy + 0.5;
       const cdx = cx - player.x, cdy = cy2 - player.y;
       const cDist = Math.hypot(cdx, cdy);
       const cRel = normalizeAngle(Math.atan2(cdy, cdx) - player.angle);
       const centerCol = Math.max(0, Math.min(W - 1, Math.round(W / 2 + Math.tan(cRel) * focal)));
-      if ((zBuffer[centerCol] ?? Infinity) < cDist * Math.cos(cRel) - 0.25) continue;
+      if ((zBuffer[centerCol] || Infinity) < cDist * Math.cos(cRel) - 0.25) continue;
 
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
@@ -2675,7 +3136,6 @@
       for (let i = 0; i < sw; i++) zBuffer[x + i] = corr;
     }
 
-    // 【新增】少帅模式：青色轨迹地面红色高亮
     if (currentRole === "marshal") {
       renderMarshalTrailGround(horizonY, focal);
     }
@@ -2683,6 +3143,10 @@
     if (currentRole === "escaper") {
       renderSprite(keyPosition.x, keyPosition.y, "key", horizonY);
       renderSprite(gunPosition.x, gunPosition.y, "gun", horizonY);
+      for (const f of fragments) {
+        if (f.taken) continue;
+        renderSprite(f.x, f.y, "fragment", horizonY);
+      }
     }
 
     renderCasings(horizonY);
@@ -2751,7 +3215,6 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    // 【改动】换弹时手枪倾斜显示；少帅模式不显示手枪
     if (currentRole === "escaper" && hasGun && state === "playing") {
       renderViewModel(horizonY);
     }
@@ -2812,7 +3275,7 @@
       const sx = W / 2 + Math.tan(rel) * focal;
       const sy = horizonY + (0.5 - c.z) * (H / corr);
       const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-      if ((zBuffer[col] ?? Infinity) < corr - 0.15) continue;
+      if ((zBuffer[col] || Infinity) < corr - 0.15) continue;
 
       const size = Math.max(1.2, (H / corr) * 0.035);
       const fade = Math.min(1, c.life / 0.8);
@@ -2845,7 +3308,7 @@
     const sx = W / 2 + Math.tan(rel) * focal;
     const scale = H / (dist * Math.cos(rel));
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-    if ((zBuffer[col] ?? Infinity) < dist - 0.2) return;
+    if ((zBuffer[col] || Infinity) < dist - 0.2) return;
 
     ctx.save();
     if (kind === "key") {
@@ -2865,6 +3328,17 @@
       const sy = horizonY + (0.5 - h) * scale;
       const size = Math.max(22, Math.min(H * 1.5, scale * 0.40));
       drawGunSprite(sx, sy, size * 0.95);
+    } else if (kind === "fragment") {
+      const bob = Math.sin(performance.now() / 320) * 0.06;
+      const h = 0.24 + bob;
+      const sy = horizonY + (0.5 - h) * scale;
+      const size = Math.max(14, Math.min(H * 1.0, scale * 0.30));
+      ctx.shadowColor = "#c9a878";
+      ctx.shadowBlur = 14;
+      ctx.font = `${size}px system-ui`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("📖", sx, sy);
     }
     ctx.restore();
   }
@@ -2873,6 +3347,7 @@
     const W = canvas.width, H = canvas.height;
     const dx = e.x - player.x, dy = e.y - player.y;
     const dist = Math.hypot(dx, dy);
+    if (dist > 20) return;
     const rel = normalizeAngle(Math.atan2(dy, dx) - player.angle);
     const fov = getFov();
     if (Math.abs(rel) > fov * 0.74 || dist < 0.08) return;
@@ -2881,7 +3356,7 @@
     const sx = W / 2 + Math.tan(rel) * focal;
     const scale = H / (dist * Math.cos(rel));
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-    if ((zBuffer[col] ?? Infinity) < dist - 0.2) return;
+    if ((zBuffer[col] || Infinity) < dist - 0.2) return;
 
     const img = (currentRole === "marshal") ? doubaoNormalImage : doubaoImage;
     if (!img.complete || !img.naturalWidth) return;
@@ -2959,7 +3434,6 @@
     ctx.restore();
   }
 
-  // 【改动】手枪视图模型：换弹时倾斜 + 震动
   function renderViewModel(horizonY) {
     const W = canvas.width, H = canvas.height;
     const moving = input.KeyW || input.KeyS || input.KeyA || input.KeyD ||
@@ -2971,15 +3445,12 @@
     const kickEase = gunKick;
     const S = H * 0.60;
 
-    // 换弹时的手枪倾斜与震动
     let reloadRot = 0;
     let reloadJitterX = 0;
     let reloadJitterY = 0;
     if (isReloading) {
       const progress = 1 - reloadTimer / RELOAD_TIME;
-      // 倾斜 -0.55 弧度（往左歪），然后回来
       reloadRot = Math.sin(progress * Math.PI) * -0.55;
-      // 震动：随时间抖动
       const jitter = Math.sin(performance.now() / 32) * 0.012 + Math.sin(performance.now() / 17) * 0.008;
       reloadJitterX = jitter * W;
       reloadJitterY = jitter * H;
@@ -3049,7 +3520,6 @@
       ctx.fill();
     }
 
-    // 换弹期间枪上显示一个弹匣阴影
     if (isReloading) {
       ctx.fillStyle = "rgba(20, 20, 25, 0.55)";
       ctx.fillRect(-S * 0.06, -S * 0.1, S * 0.12, S * 0.2);
@@ -3058,7 +3528,6 @@
     ctx.restore();
   }
 
-  // ============ 小地图 ============
   function drawMinimapCells(x0, y0, cell) {
     if (currentRole === "marshal") {
       for (let y = 0; y < MAP_H; y++) {
@@ -3123,6 +3592,7 @@
       ctx.shadowBlur = 0;
 
       for (const e of enemies) {
+        if (e.isRemote && !remotePlayer.ready) continue;
         drawEnemyAvatarOnMap(x0, y0, cell, e);
       }
 
@@ -3150,6 +3620,7 @@
     const detectRange = preset.detectRange;
     if (detectRange > 0) {
       for (const e of enemies) {
+        if (e.isRemote && !remotePlayer.ready) continue;
         const dToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
         if (dToPlayer >= detectRange) continue;
         drawEnemyAvatarOnMap(x0, y0, cell, e);
@@ -3197,7 +3668,10 @@
       }
       ctx.shadowBlur = 0;
 
-      for (const e of enemies) drawEnemyAvatarOnMap(x0, y0, cell, e);
+      for (const e of enemies) {
+        if (e.isRemote && !remotePlayer.ready) continue;
+        drawEnemyAvatarOnMap(x0, y0, cell, e);
+      }
     } else {
       if (!hasGun && !gunPicked && gunCellRef && explored[gunCellRef.y] && explored[gunCellRef.y][gunCellRef.x]) {
         ctx.shadowColor = "#7fb8ff"; ctx.shadowBlur = 14;
@@ -3221,6 +3695,7 @@
       const detectRange = preset.detectRange;
       if (detectRange > 0) {
         for (const e of enemies) {
+          if (e.isRemote && !remotePlayer.ready) continue;
           const dToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
           if (dToPlayer >= detectRange) continue;
           drawEnemyAvatarOnMap(x0, y0, cell, e);
@@ -3411,7 +3886,7 @@
       const sx = W / 2 + Math.tan(rel) * focal;
       const sy = horizonY + (0.5 - p.z) * (H / corr);
       const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
-      if ((zBuffer[col] ?? Infinity) < corr - 0.18) continue;
+      if ((zBuffer[col] || Infinity) < corr - 0.18) continue;
       const r = Math.max(0.8, (H / corr) * p.size);
       const fade = Math.max(0, Math.min(1, p.life / p.maxLife));
       ctx.globalAlpha = 0.25 + fade * 0.7;
@@ -3438,12 +3913,12 @@
     }
   }
 
-  // ============================ 主循环 ============================
   function frame(now) {
     const dt = Math.min(MAX_DT, (now - lastTime) / 1000);
     lastTime = now;
     if (state === "playing") {
       updatePlayer(dt);
+      checkFragmentPickup();
       if (state === "playing") updateEnemies(dt);
       updateScares(dt);
       updateBlood(dt);
@@ -3456,7 +3931,6 @@
     requestAnimationFrame(frame);
   }
 
-  // ============================ 输入 ============================
   window.addEventListener("resize", resizeCanvas);
 
   function updateSensitivityDisplay() {
@@ -3492,7 +3966,7 @@
   document.addEventListener("mousemove", (e) => {
     if (state === "playing" && document.pointerLockElement === canvas) {
       if (Math.abs(e.movementY) > 0.5) lastMouseMoveTime = performance.now();
-      if (currentRole === "marshal" && playerFrozenTimer > 0) return;
+      if (currentRole === "marshal" && playerFrozenTimer > 0 && !multiplayer) return;
       player.angle = normalizeAngle(player.angle + e.movementX * BASE_MOUSE_SENS * sensitivityMult);
       player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
         player.pitch + e.movementY * PITCH_SENSITIVITY * sensitivityMult));
@@ -3544,10 +4018,288 @@
     });
   }
 
+  function showScreen(el) {
+    for (const s of [menu, lobby, setup, result]) s.classList.remove("is-visible");
+    if (el) el.classList.add("is-visible");
+    if (topBar) topBar.style.display = (el === menu) ? "" : "none";
+  }
+
+  function enterSetupScreen() {
+    setupRoomCode.textContent = Net.roomCode || "------";
+    updateSetupUI();
+    showScreen(setup);
+  }
+
+  function updateSetupUI() {
+    const isHost = Net.isHost;
+    for (const btn of document.querySelectorAll("[data-setup-role]")) {
+      const role = btn.dataset.setupRole;
+      const mine = localChoice.role === role;
+      const taken = remoteChoice.role === role;
+      btn.setAttribute("aria-checked", mine ? "true" : "false");
+      btn.classList.toggle("is-taken", taken);
+      btn.classList.toggle("is-mine", mine);
+      btn.disabled = taken;
+    }
+    for (const btn of document.querySelectorAll("[data-setup-difficulty]")) {
+      const diff = btn.dataset.setupDifficulty;
+      const selected = (isHost ? localChoice.difficulty : remoteChoice.difficulty) === diff;
+      btn.setAttribute("aria-checked", selected ? "true" : "false");
+      btn.style.pointerEvents = isHost ? "auto" : "none";
+      btn.style.opacity = isHost ? "1" : ".6";
+    }
+    const myReady = localChoice.ready ? "（已准备）" : "";
+    const theirReady = remoteChoice.ready ? "（已准备）" : "";
+    const myRoleTxt = localChoice.role ? (localChoice.role === "marshal" ? "少帅" : "逃离者") : "未选";
+    const theirRoleTxt = remoteChoice.role ? (remoteChoice.role === "marshal" ? "少帅" : "逃离者") : "未选";
+    setupStatus.textContent = `你：${myRoleTxt}${myReady} · 对方：${theirRoleTxt}${theirReady}`;
+  }
+
+  function checkStartGame() {
+    if (!Net.isHost) return;
+    if (localChoice.ready && remoteChoice.ready &&
+        localChoice.role && remoteChoice.role &&
+        localChoice.role !== remoteChoice.role) {
+      const seed = Math.floor(Math.random() * 1e9);
+      Net.send("start", {
+        seed,
+        hostRole: localChoice.role,
+        difficulty: localChoice.difficulty || "hard"
+      });
+      multiplayer = true;
+      localRole = localChoice.role;
+      remoteRole = remoteChoice.role;
+      currentDifficulty = localChoice.difficulty || "hard";
+      startGame(seed);
+    }
+  }
+
+  Net.on("open", () => {
+    if (state !== "menu") return;
+    lobbyStatusJoin.textContent = "已连接！即将进入准备阶段…";
+    setTimeout(() => {
+      if (state === "menu") {
+        localChoice = { role: null, difficulty: null, ready: false };
+        remoteChoice = { role: null, difficulty: null, ready: false };
+        enterSetupScreen();
+      }
+    }, 500);
+  });
+
+  Net.on("close", () => {
+    if (multiplayer && state === "playing") {
+      showMessage("对方已断开连接", 3000);
+      state = "menu";
+      hud.classList.remove("is-visible");
+      crosshair.classList.remove("is-visible");
+      mobileControls.classList.remove("is-visible");
+      if (fragmentCounter) fragmentCounter.hidden = true;
+      multiplayer = false;
+      showScreen(menu);
+    }
+  });
+
+  Net.on("state", (msg) => {
+    if (!msg) return;
+    remotePlayer.x = msg.x;
+    remotePlayer.y = msg.y;
+    remotePlayer.angle = msg.a;
+    remotePlayer.ready = true;
+  });
+
+  Net.on("trail", (msg) => {
+    if (!msg) return;
+    escaperTrail.add(`${msg.gx},${msg.gy}`);
+  });
+
+  Net.on("choice", (msg) => {
+    if (!msg) return;
+    remoteChoice = {
+      role: msg.role,
+      difficulty: msg.difficulty,
+      ready: msg.ready
+    };
+    updateSetupUI();
+    checkStartGame();
+  });
+
+  Net.on("start", (msg) => {
+    if (!msg) return;
+    multiplayer = true;
+    localRole = msg.hostRole === "escaper" ? "marshal" : "escaper";
+    remoteRole = msg.hostRole;
+    currentDifficulty = msg.difficulty || "hard";
+    startGame(msg.seed);
+  });
+
+  Net.on("lock-start", () => {
+    if (localRole === "marshal" && multiplayer) {
+      showMessage("逃离者把刀插进了锁里！", 2600);
+      lockState = "inserted";
+      lockTimer = LOCK_DURATION;
+      rageFlash = 1.2;
+    }
+  });
+
+  Net.on("lock-open", () => {
+    if (localRole === "marshal" && multiplayer) {
+      lockState = "open";
+      map[exitCell.y][exitCell.x] = 0;
+      doorOpened = true;
+      showMessage("锁开了！", 1600);
+    }
+  });
+
+  Net.on("end", (msg) => {
+    if (gameEnded) return;
+    gameEnded = true;
+    if (!msg) return;
+    endGame(!msg.escaperWon);
+  });
+
+  if (multiplayerBtn) {
+    multiplayerBtn.addEventListener("click", () => {
+      multiplayer = false;
+      remoteChoice = { role: null, difficulty: null, ready: false };
+      localChoice = { role: null, difficulty: null, ready: false };
+      roomInfo.hidden = true;
+      lobbyStatusJoin.textContent = "";
+      roomInput.value = "";
+      showScreen(lobby);
+    });
+  }
+
+  if (lobbyBackBtn) {
+    lobbyBackBtn.addEventListener("click", () => {
+      Net.close();
+      showScreen(menu);
+    });
+  }
+
+  if (createRoomBtn) {
+    createRoomBtn.addEventListener("click", () => {
+      createRoomBtn.disabled = true;
+      lobbyStatus.textContent = "正在创建房间…";
+      lobbyStatusJoin.textContent = "";
+      Net.createRoom((err, code) => {
+        createRoomBtn.disabled = false;
+        if (err) {
+          lobbyStatus.textContent = "❌ " + err;
+          return;
+        }
+        roomCodeEl.textContent = code;
+        roomInfo.hidden = false;
+        lobbyStatus.textContent = "等待好友加入…";
+      });
+    });
+  }
+
+  if (copyRoomBtn) {
+    copyRoomBtn.addEventListener("click", async () => {
+      const code = Net.roomCode;
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        copyRoomBtn.textContent = "✅ 已复制";
+        setTimeout(() => { copyRoomBtn.textContent = "📋 复制房间号"; }, 1500);
+      } catch (e) {
+        roomInput.value = code;
+        roomInput.select();
+        copyRoomBtn.textContent = "✅ 已选中";
+        setTimeout(() => { copyRoomBtn.textContent = "📋 复制房间号"; }, 1500);
+      }
+    });
+  }
+
+  if (joinRoomBtn) {
+    joinRoomBtn.addEventListener("click", () => {
+      const code = (roomInput.value || "").trim();
+      if (!/^\d{6}$/.test(code)) {
+        lobbyStatusJoin.textContent = "请输入 6 位数字房间号";
+        return;
+      }
+      joinRoomBtn.disabled = true;
+      lobbyStatusJoin.textContent = "正在加入房间…";
+      Net.joinRoom(code, (err) => {
+        joinRoomBtn.disabled = false;
+        if (err) {
+          lobbyStatusJoin.textContent = "❌ " + err;
+          return;
+        }
+        lobbyStatusJoin.textContent = "已连接！";
+      });
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-setup-role]")) {
+    btn.addEventListener("click", () => {
+      const role = btn.dataset.setupRole;
+      if (remoteChoice.role === role) return;
+      localChoice.role = role;
+      localChoice.ready = false;
+      if (setupReadyBtn) setupReadyBtn.textContent = "准备";
+      updateSetupUI();
+      Net.send("choice", {
+        role: localChoice.role,
+        difficulty: localChoice.difficulty,
+        ready: false
+      });
+      checkStartGame();
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-setup-difficulty]")) {
+    btn.addEventListener("click", () => {
+      if (!Net.isHost) return;
+      localChoice.difficulty = btn.dataset.setupDifficulty;
+      localChoice.ready = false;
+      if (setupReadyBtn) setupReadyBtn.textContent = "准备";
+      updateSetupUI();
+      Net.send("choice", {
+        role: localChoice.role,
+        difficulty: localChoice.difficulty,
+        ready: false
+      });
+      checkStartGame();
+    });
+  }
+
+  if (setupReadyBtn) {
+    setupReadyBtn.addEventListener("click", () => {
+      if (!localChoice.role) {
+        setupStatus.textContent = "请先选择角色";
+        return;
+      }
+      if (!Net.isHost && !remoteChoice.difficulty) {
+        setupStatus.textContent = "等待房主选择难度…";
+        return;
+      }
+      localChoice.ready = !localChoice.ready;
+      setupReadyBtn.textContent = localChoice.ready ? "取消准备" : "准备";
+      Net.send("choice", {
+        role: localChoice.role,
+        difficulty: localChoice.difficulty,
+        ready: localChoice.ready
+      });
+      updateSetupUI();
+      checkStartGame();
+    });
+  }
+
+  if (setupLeaveBtn) {
+    setupLeaveBtn.addEventListener("click", () => {
+      Net.close();
+      multiplayer = false;
+      showScreen(menu);
+    });
+  }
+
   for (const btn of document.querySelectorAll("[data-role]")) {
     btn.addEventListener("click", () => {
       const key = btn.dataset.role;
       if (key !== "escaper" && key !== "marshal") return;
+      multiplayer = false;
+      isDailyChallenge = false;
       currentRole = key;
       for (const b of document.querySelectorAll("[data-role]")) {
         b.setAttribute("aria-checked", b === btn ? "true" : "false");
@@ -3563,6 +4315,8 @@
     btn.addEventListener("click", () => {
       const key = btn.dataset.difficulty;
       if (!DIFFICULTIES[key]) return;
+      multiplayer = false;
+      isDailyChallenge = false;
       currentDifficulty = key;
       for (const b of document.querySelectorAll("[data-difficulty]")) {
         b.setAttribute("aria-checked", b === btn ? "true" : "false");
@@ -3573,7 +4327,164 @@
     });
   }
 
-  restartButton.addEventListener("click", startGame);
+  function updateDailyInfo() {
+    if (!dailyInfo) return;
+    dailyDay = todayStr();
+    dailySeed = getDailySeed(dailyDay);
+    if (window.Lore) {
+      const diary = Lore.getDailyDiary(dailyDay);
+      dailyInfo.innerHTML =
+        `今日种子：<strong>${dailySeed}</strong><br>` +
+        `<span style="color:#8d6a45">${diary.title}</span>`;
+    } else {
+      dailyInfo.innerHTML = `今日种子：<strong>${dailySeed}</strong>`;
+    }
+  }
+
+  function beginDailyRun(mode) {
+    dailyDay = todayStr();
+    dailySeed = getDailySeed(dailyDay);
+    challengeMode = mode;
+    isDailyChallenge = true;
+    multiplayer = false;
+    currentRole = "escaper";
+    currentDifficulty = mode;
+    if (topBar) topBar.style.display = "none";
+    startGame(dailySeed);
+  }
+
+  function startDailyChallenge(mode) {
+    if (window.Account && !Account.isLoggedIn()) {
+      openAuthModal(() => beginDailyRun(mode));
+      return;
+    }
+    beginDailyRun(mode);
+  }
+
+  if (dailyNightmareBtn) dailyNightmareBtn.addEventListener("click", () => startDailyChallenge("nightmare"));
+  if (dailyHellBtn) dailyHellBtn.addEventListener("click", () => startDailyChallenge("hell"));
+  updateDailyInfo();
+
+  if (customSeedBtn) {
+    customSeedBtn.addEventListener("click", () => {
+      const raw = (customSeedInput.value || "").trim();
+      let seed;
+      if (raw === "") {
+        seed = Math.floor(Math.random() * 1e9);
+      } else {
+        const n = parseInt(raw, 10);
+        if (!isFinite(n) || n < 0) { showMessage("种子必须是正整数", 2000); return; }
+        seed = n % 1000000000;
+      }
+      multiplayer = false;
+      isDailyChallenge = false;
+      currentRole = "escaper";
+      currentDifficulty = customSeedMode ? customSeedMode.value : "easy";
+      if (topBar) topBar.style.display = "none";
+      startGame(seed);
+    });
+  }
+
+  let authMode = "login";
+  let authCallback = null;
+
+  function refreshAccountUI() {
+    if (!accountLabel) return;
+    accountLabel.textContent = (window.Account && Account.isLoggedIn())
+      ? Account.getUsername()
+      : "登录 / 注册";
+    if (authLogoutBtn) {
+      authLogoutBtn.style.display = (window.Account && Account.isLoggedIn()) ? "inline-block" : "none";
+    }
+  }
+
+  function openAuthModal(cb) {
+    authCallback = cb || null;
+    if (authModal) authModal.classList.add("is-visible");
+    if (authError) authError.textContent = "";
+  }
+  function closeAuthModal() {
+    if (authModal) authModal.classList.remove("is-visible");
+    authCallback = null;
+  }
+
+  if (accountBtn) accountBtn.addEventListener("click", () => openAuthModal());
+  if (authCloseBtn) authCloseBtn.addEventListener("click", closeAuthModal);
+  if (authModal) authModal.addEventListener("click", (e) => { if (e.target === authModal) closeAuthModal(); });
+
+  for (const t of authTabs) {
+    t.addEventListener("click", () => {
+      authMode = t.dataset.authTab;
+      for (const b of authTabs) b.classList.toggle("is-active", b === t);
+      if (authSubmit) authSubmit.textContent = authMode === "login" ? "登录" : "注册";
+      if (authError) authError.textContent = "";
+    });
+  }
+
+  if (authSubmit) {
+    authSubmit.addEventListener("click", async () => {
+      const u = (authUsername.value || "").trim();
+      const p = authPassword.value || "";
+      if (!u || !p) { authError.textContent = "请输入用户名和密码"; return; }
+      authSubmit.disabled = true;
+      authError.textContent = "";
+      try {
+        if (authMode === "login") await Account.login(u, p);
+        else await Account.register(u, p);
+        refreshAccountUI();
+        authPassword.value = "";
+        const cb = authCallback;
+        closeAuthModal();
+        if (cb) cb();
+      } catch (err) {
+        authError.textContent = err.message;
+      } finally {
+        authSubmit.disabled = false;
+      }
+    });
+  }
+
+  if (authLogoutBtn) {
+    authLogoutBtn.addEventListener("click", async () => {
+      await Account.logout();
+      refreshAccountUI();
+      closeAuthModal();
+    });
+  }
+  refreshAccountUI();
+
+  let lbMode = "nightmare";
+  function openLeaderboard() {
+    if (lbModal) lbModal.classList.add("is-visible");
+    if (lbDate) lbDate.textContent = "数据日期：" + Leaderboard.todayStr();
+    for (const t of lbTabs) t.classList.toggle("is-active", t.dataset.lbMode === lbMode);
+    if (lbContainer) Leaderboard.render(lbContainer, lbMode);
+  }
+  function closeLeaderboard() {
+    if (lbModal) lbModal.classList.remove("is-visible");
+  }
+  if (leaderboardBtn) leaderboardBtn.addEventListener("click", openLeaderboard);
+  if (lbCloseBtn) lbCloseBtn.addEventListener("click", closeLeaderboard);
+  if (lbModal) lbModal.addEventListener("click", (e) => { if (e.target === lbModal) closeLeaderboard(); });
+  for (const t of lbTabs) {
+    t.addEventListener("click", () => {
+      lbMode = t.dataset.lbMode;
+      for (const b of lbTabs) b.classList.toggle("is-active", b === t);
+      if (lbContainer) Leaderboard.render(lbContainer, lbMode);
+    });
+  }
+
+  restartButton.addEventListener("click", () => {
+    isDailyChallenge = false;
+    if (topBar) topBar.style.display = "";
+    if (multiplayer) {
+      Net.close();
+      multiplayer = false;
+      showScreen(menu);
+      return;
+    }
+    startGame();
+  });
 
   resizeCanvas();
   renderIdle();

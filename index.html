@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#080604" />
-    <meta name="description" content="恐怖少帅：随机迷宫，先找枪再找刀，把刀插进铁笼的锁里，撑过 30 秒。" />
-    <title>恐怖少帅</title>
+    <meta name="description" content="恐怖少帅：善良人格与邪恶人格的追逃。每日种子地图，噩梦/地狱排行榜。" />
+    <title>恐怖少帅 · 小锦</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -15,14 +15,56 @@
       <div class="noise" aria-hidden="true"></div>
       <div class="vignette" aria-hidden="true"></div>
 
+      <div id="top-bar" class="top-bar">
+        <button id="account-btn" class="top-bar-btn" type="button">
+          👤 <span id="account-label">登录 / 注册</span>
+        </button>
+        <button id="leaderboard-btn" class="top-bar-btn" type="button">
+          🏆 排行榜
+        </button>
+      </div>
+
       <section id="menu" class="screen is-visible" aria-labelledby="game-title">
         <div class="menu-card">
-          <p class="eyebrow">单人逃生</p>
+          <p class="eyebrow">善良人格 · 邪恶人格</p>
           <div class="menu-portrait">
-            <img src="assets/doubao-normal.png" alt="少帅" />
+            <img src="assets/doubao-normal.png" alt="小锦" />
           </div>
           <h1 id="game-title">恐怖少帅</h1>
+          <p class="menu-quote" id="menu-quote">——“哥哥，你要活下去。”</p>
           <p class="menu-copy">先找枪，再找刀。把刀插进铁笼的锁里——撑过 30 秒。</p>
+
+          <div class="daily-block">
+            <div class="daily-header">
+              <span class="daily-tag">每日挑战</span>
+              <span class="daily-seed-line" id="daily-info">加载中…</span>
+            </div>
+            <div class="daily-buttons">
+              <button id="daily-nightmare-btn" class="daily-btn" type="button">
+                <span class="daily-btn-name">难度 2 · 噩梦</span>
+                <span class="daily-btn-desc">无感知 · 时间最短者榜首</span>
+              </button>
+              <button id="daily-hell-btn" class="daily-btn" type="button">
+                <span class="daily-btn-name">难度 1 · 地狱</span>
+                <span class="daily-btn-desc">两个少帅 · 时间最短者榜首</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="custom-seed-block">
+            <span class="custom-seed-label">自定义种子</span>
+            <div class="custom-seed-row">
+              <input id="custom-seed-input" type="text" placeholder="留空 = 随机" inputmode="numeric" maxlength="10" />
+              <select id="custom-seed-mode">
+                <option value="peace">和平</option>
+                <option value="easy" selected>简单</option>
+                <option value="hard">困难</option>
+                <option value="nightmare">噩梦</option>
+                <option value="hell">地狱</option>
+              </select>
+              <button id="custom-seed-btn" class="mini-btn" type="button">开始</button>
+            </div>
+          </div>
 
           <div class="sensitivity-row">
             <span class="sens-label">镜头灵敏度</span>
@@ -30,14 +72,16 @@
             <span id="sens-value" class="sens-value">1.00x</span>
           </div>
 
+          <p class="section-label">自由对战</p>
+
           <div class="role-list" role="radiogroup" aria-label="角色选择">
             <button class="role-btn" data-role="escaper" role="radio" aria-checked="true" type="button">
               <span class="role-name">逃离者模式</span>
-              <span class="role-desc">先找枪，再找刀，撑过 30 秒钻铁笼。</span>
+              <span class="role-desc">善良的小锦。找枪、找刀、钻铁笼。</span>
             </button>
             <button class="role-btn" data-role="marshal" role="radio" aria-checked="false" type="button">
               <span class="role-name">少帅模式</span>
-              <span class="role-desc">追捕逃离者。只能走他走过的路。</span>
+              <span class="role-desc">邪恶的人格。只能走他走过的路。</span>
             </button>
           </div>
 
@@ -56,17 +100,22 @@
             </button>
             <button class="difficulty-btn" data-difficulty="nightmare" role="radio" aria-checked="false" type="button">
               <span class="diff-name">噩梦模式</span>
-              <span class="diff-desc">没有感知 · 少帅模式也不显示逃离者位置</span>
+              <span class="diff-desc">没有感知 · 不计入排行榜</span>
             </button>
             <button class="difficulty-btn" data-difficulty="hell" role="radio" aria-checked="false" type="button">
               <span class="diff-name">地狱模式</span>
-              <span class="diff-desc">两个少帅 · 少帅模式也不显示逃离者位置</span>
+              <span class="diff-desc">两个少帅 · 不计入排行榜</span>
             </button>
           </div>
 
+          <p class="section-label">联机对战</p>
+          <button id="multiplayer-btn" class="multiplayer-button" type="button">
+            🌐 创建 / 加入房间
+          </button>
+
           <div class="controls-hint" aria-label="操作说明">
             <span><kbd>WASD</kbd> 移动</span>
-            <span><kbd>鼠标</kbd> 转向 / 瞄准</span>
+            <span><kbd>鼠标</kbd> 转向</span>
             <span><kbd>Shift</kbd> 奔跑</span>
             <span><kbd>左键</kbd> 开枪</span>
             <span><kbd>F</kbd> 换弹</span>
@@ -76,6 +125,88 @@
         </div>
       </section>
 
+      <section id="lobby" class="screen" aria-labelledby="lobby-title">
+        <div class="menu-card">
+          <p class="eyebrow">联机对战</p>
+          <h2 id="lobby-title">联机大厅</h2>
+          <p class="menu-copy">创建房间，把房间号发给好友；或输入好友的房间号加入。</p>
+
+          <div class="lobby-row">
+            <button id="create-room-btn" class="primary-button" type="button">创建房间</button>
+          </div>
+
+          <div id="room-info" class="room-info" hidden>
+            <span class="room-label">房间号</span>
+            <strong id="room-code">------</strong>
+            <button id="copy-room-btn" class="copy-btn" type="button">📋 复制房间号</button>
+            <p class="room-hint">把房间号发给好友，等好友加入后一起进入准备阶段</p>
+            <p id="lobby-status" class="lobby-status">等待好友加入…</p>
+          </div>
+
+          <div class="lobby-divider">或</div>
+
+          <div class="lobby-row join-row">
+            <input id="room-input" type="text" maxlength="6" placeholder="输入房间号" inputmode="numeric" />
+            <button id="join-room-btn" class="primary-button" type="button">加入</button>
+          </div>
+
+          <p id="lobby-status-join" class="lobby-status"></p>
+
+          <button id="lobby-back-btn" class="ghost-button" type="button">返回</button>
+        </div>
+      </section>
+
+      <section id="setup" class="screen" aria-labelledby="setup-title">
+        <div class="menu-card">
+          <p class="eyebrow">准备阶段</p>
+          <h2 id="setup-title">选择你的角色</h2>
+          <p class="setup-room">房间号：<strong id="setup-room-code">------</strong></p>
+
+          <div class="role-picker" role="radiogroup" aria-label="选择角色">
+            <button class="role-btn big" data-setup-role="escaper" role="radio" aria-checked="false" type="button">
+              <span class="role-name">逃离者</span>
+              <span class="role-desc">善良的小锦</span>
+            </button>
+            <button class="role-btn big" data-setup-role="marshal" role="radio" aria-checked="false" type="button">
+              <span class="role-name">少帅</span>
+              <span class="role-desc">邪恶的人格</span>
+            </button>
+          </div>
+
+          <p class="section-label">难度（由房主选择）</p>
+
+          <div class="difficulty-list" role="radiogroup" aria-label="难度选择">
+            <button class="difficulty-btn" data-setup-difficulty="hard" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">难度 1</span>
+              <span class="diff-desc">正常移速 · 提前 4 格感知</span>
+            </button>
+            <button class="difficulty-btn" data-setup-difficulty="nightmare" role="radio" aria-checked="false" type="button">
+              <span class="diff-name">难度 2</span>
+              <span class="diff-desc">没有感知 · 少帅不显示逃离者位置</span>
+            </button>
+          </div>
+
+          <p id="setup-status" class="lobby-status">等待双方选择…</p>
+
+          <div class="setup-actions">
+            <button id="setup-ready-btn" class="primary-button" type="button">准备</button>
+            <button id="setup-leave-btn" class="ghost-button" type="button">离开房间</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 剧情字幕（全屏 / 底部） ===== -->
+      <div id="cutscene" class="cutscene" aria-live="polite">
+        <div class="cutscene-inner">
+          <p id="cutscene-title" class="cutscene-title"></p>
+          <p id="cutscene-text" class="cutscene-text"></p>
+        </div>
+      </div>
+      <div id="subtitle" class="subtitle" aria-live="polite"></div>
+      <div id="fragment-counter" class="fragment-counter" hidden>
+        📖 <span id="fragment-count">0</span> / 10
+      </div>
+
       <section id="result" class="screen" aria-live="assertive">
         <div class="result-card">
           <div class="result-portrait" aria-hidden="true">
@@ -84,6 +215,7 @@
           <p id="result-kicker" class="eyebrow">游戏结束</p>
           <h2 id="result-title">他抓到你了</h2>
           <p id="result-copy">黑暗里传来熟悉的笑声。</p>
+          <p id="result-stats" class="result-stats"></p>
           <button id="restart-button" class="primary-button" type="button">再试一次</button>
         </div>
       </section>
@@ -122,7 +254,45 @@
       <div id="loading-error" class="asset-error" role="alert" hidden>
         少帅图片没有加载成功，请确认 assets 文件夹与网页文件放在一起。
       </div>
+
+      <div id="auth-modal" class="modal">
+        <div class="modal-card">
+          <button id="auth-close-btn" class="modal-close" type="button">✕</button>
+          <h3 class="modal-title">账号</h3>
+          <div class="auth-tabs">
+            <button data-auth-tab="login" class="auth-tab is-active" type="button">登录</button>
+            <button data-auth-tab="register" class="auth-tab" type="button">注册</button>
+          </div>
+          <input id="auth-username" class="modal-input" type="text" placeholder="用户名（2-20 位）" autocomplete="username" />
+          <input id="auth-password" class="modal-input" type="password" placeholder="密码（至少 6 位）" autocomplete="current-password" />
+          <p id="auth-error" class="modal-error"></p>
+          <div class="modal-actions">
+            <button id="auth-submit" class="primary-button" type="button">登录</button>
+            <button id="auth-logout-btn" class="ghost-button" type="button" style="display:none">退出登录</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="lb-modal" class="modal">
+        <div class="modal-card lb-card">
+          <button id="lb-close-btn" class="modal-close" type="button">✕</button>
+          <h3 class="modal-title">今日排行榜</h3>
+          <p id="lb-date" class="lb-date"></p>
+          <div class="lb-tabs">
+            <button data-lb-mode="nightmare" class="lb-tab is-active" type="button">难度 2 · 噩梦</button>
+            <button data-lb-mode="hell" class="lb-tab" type="button">难度 1 · 地狱</button>
+          </div>
+          <div id="lb-container" class="lb-container"></div>
+          <p class="lb-hint">仅记录今日每日挑战中「逃脱成功」用时最短的十位玩家</p>
+        </div>
+      </div>
     </main>
+
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="lore.js"></script>
+    <script src="account.js"></script>
+    <script src="leaderboard.js"></script>
+    <script src="net.js"></script>
     <script src="game.js"></script>
   </body>
 </html>
