@@ -49,6 +49,11 @@ window.Net = (() => {
 
   function setupConn(c) {
     conn = c;
+    // 如果连接已 open（如 joiner 在 c.on("open") 后才调 setupConn），直接标记
+    if (c.open) {
+      connectedFlag = true;
+      emit("open");
+    }
     conn.on("open", () => { connectedFlag = true; emit("open"); });
     conn.on("data", (data) => {
       if (data && typeof data === "object" && typeof data.t === "string") {
