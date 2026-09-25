@@ -108,6 +108,10 @@
             </button>
           </div>
 
+          <button id="replay-intro-btn" class="ghost-button" type="button" style="margin-bottom:8px;">
+            📖 重看开场动画
+          </button>
+
           <p class="section-label">联机对战</p>
           <button id="multiplayer-btn" class="multiplayer-button" type="button">
             🌐 创建 / 加入房间
@@ -203,10 +207,6 @@
         </div>
       </div>
       <div id="subtitle" class="subtitle" aria-live="polite"></div>
-      <div id="fragment-counter" class="fragment-counter" hidden>
-        📖 <span id="fragment-count">0</span> / 10
-      </div>
-
       <section id="result" class="screen" aria-live="assertive">
         <div class="result-card">
           <div class="result-portrait" aria-hidden="true">
@@ -216,7 +216,10 @@
           <h2 id="result-title">他抓到你了</h2>
           <p id="result-copy">黑暗里传来熟悉的笑声。</p>
           <p id="result-stats" class="result-stats"></p>
-          <button id="restart-button" class="primary-button" type="button">再试一次</button>
+          <div class="result-actions">
+            <button id="restart-button" class="primary-button" type="button">再试一次</button>
+            <button id="result-lb-btn" class="ghost-button" type="button">🏆 今日排行榜</button>
+          </div>
         </div>
       </section>
 
@@ -288,7 +291,8 @@
       </div>
     </main>
 
-    <script src="assets/peerjs.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="story_intro.js"></script>
     <script src="lore.js"></script>
     <script src="account.js"></script>
     <script src="leaderboard.js"></script>

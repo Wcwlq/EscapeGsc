@@ -40,13 +40,10 @@
   const setupReadyBtn = document.getElementById("setup-ready-btn");
   const setupLeaveBtn = document.getElementById("setup-leave-btn");
 
-  // v2.2 剧情系统 DOM
   const cutscene = document.getElementById("cutscene");
   const cutsceneTitle = document.getElementById("cutscene-title");
   const cutsceneText = document.getElementById("cutscene-text");
   const subtitle = document.getElementById("subtitle");
-  const fragmentCounter = document.getElementById("fragment-counter");
-  const fragmentCount = document.getElementById("fragment-count");
 
   crosshair.style.display = "none";
 
@@ -54,9 +51,16 @@
   ammoCounter.id = "ammo-counter";
   ammoCounter.innerHTML = `
     <div class="ammo-dots"></div>
-    <div class="ammo-text">0 / 14</div>
+    <div class="ammo-text">0 / 16</div>
   `;
   document.getElementById("game-shell").appendChild(ammoCounter);
+
+  // ============================ 安全工具 ============================
+  // ★ 关键修复：安全地随机取一行文本，避免 undefined 抛异常导致帧循环崩溃
+  function pickLine(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) return "";
+    return arr[Math.floor(Math.random() * arr.length)] || "";
+  }
 
   // ============================ 常量 ============================
   const MAP_W = 21;
@@ -106,7 +110,7 @@
   const WALL_SCARE_MIN_INTERVAL = 1;
   const WALL_SCARE_MAX_INTERVAL = 4;
 
-  const MAX_AMMO = 14;
+  const MAX_AMMO = 16;
   const RELOAD_TIME = 1.5;
   const DUD_CHANCE = 0.65;
   const DUD_MIN_COUNT = 1;
@@ -115,7 +119,6 @@
 
   const KNOCKBACK_BASE = 2.5;
 
-  // ============================ 难度 ============================
   const DIFFICULTIES = {
     peace:     { label: "和平模式", enemySpeedMult: 0.75, detectRange: 10, enemyCount: 1 },
     easy:      { label: "简单模式", enemySpeedMult: 1.0,  detectRange: 6,  enemyCount: 1 },
@@ -167,6 +170,7 @@
 
   let escaperVisitedGun = false;
   let escaperVisitedKey = false;
+  let escaperVisitedCage = false;   // ★ 新增：AI 是否已接近过铁笼
 
   let magazine = [];
   let isReloading = false;
@@ -228,7 +232,6 @@
   let gameSeed = 0;
   let gameEnded = false;
 
-  // ===== v2: 每日挑战 / 计时 / 剧情 =====
   let isDailyChallenge = false;
   let challengeMode = "nightmare";
   let gameStartTime = 0;
@@ -236,15 +239,53 @@
   let dailySeed = 0;
   let submittedThisRun = false;
 
-  // ===== v2.2: 剧情系统状态 =====
   let cutsceneTimer = 0;
   let subtitleTimer = 0;
-  let fragments = [];
-  let fragmentsPicked = 0;
   let countdownVoiceTimer = 0;
   let countdownVoiceIndex = 0;
   let wallVoiceCooldown = 0;
   let isCutscenePaused = false;
+
+  let memoryTimer = 0;
+  let memoryInterval = 18;
+  let memoryCooldown = 12;
+  let usedMemoryIndexes = new Set();
+  let memoryShotCount = 0;
+
+  let storyFlags = {
+    seenGun: false,
+    pickedGun: false,
+    seenKey: false,
+    pickedKey: false,
+    seenExit: false,
+    insertedKnife: false,
+    cageOpened: false,
+    aiTookGun: false,
+    aiTookKnife: false,
+    aiReachCage: false
+  };
+
+  const atmosphere = {
+    petals: 0,
+    lightRadius: 11.5,
+    fireIntensity: 0,
+    batBoost: 0,
+    swayX: 0,
+    swayY: 0
+  };
+
+  const petals = [];
+  const PETAL_COUNT = 70;
+
+  const audioLayers = {
+    fire: null,
+    breath: null,
+    wind: null,
+    batHum: null,
+    fireCrackTimer: 0,
+    breathInterval: 3.5,
+    breathTimer: 3.5
+  };
 
   function getDailySeed(dateStr) {
     let h = 2166136261;
@@ -263,7 +304,7 @@
   }
 
   const menuQuoteEl = document.getElementById("menu-quote");
-  if (menuQuoteEl && window.Lore) menuQuoteEl.textContent = window.Lore.MENU_QUOTE;
+  if (menuQuoteEl && window.Lore) menuQuoteEl.textContent = window.Lore.MENU_QUOTE || "";
 
   const topBar = document.getElementById("top-bar");
   const accountBtn = document.getElementById("account-btn");
@@ -288,10 +329,11 @@
   const customSeedInput = document.getElementById("custom-seed-input");
   const customSeedMode = document.getElementById("custom-seed-mode");
   const customSeedBtn = document.getElementById("custom-seed-btn");
+  const replayIntroBtn = document.getElementById("replay-intro-btn");
 
   const doubaoImage = new Image();
   doubaoImage.src = "assets/doubao.jpg";
-  doubaoImage.addEventListener("error", () => { loadingError.hidden = false; });
+  doubaoImage.addEventListener("error", () => { if (loadingError) loadingError.hidden = false; });
   doubaoImage.addEventListener("load", () => { buildWallTextures(); });
 
   const doubaoNormalImage = new Image();
@@ -505,7 +547,7 @@
   }
 
   function getFov() { return BASE_FOV; }
-  function currentPreset() { return DIFFICULTIES[currentDifficulty]; }
+  function currentPreset() { return DIFFICULTIES[currentDifficulty] || DIFFICULTIES.easy; }
 
   function generateMagazine() {
     const mag = new Array(MAX_AMMO).fill(true);
@@ -659,17 +701,31 @@
       }
     }
 
+    if (cells.length === 0) {
+      // 极端情况兜底
+      return {
+        map: grid,
+        exitCell: { x: 1, y: 1 },
+        gunCell: { x: 1, y: 1 },
+        keyCell: { x: 1, y: 1 },
+        enemyCell: { x: 1, y: 1 },
+        enemyCell2: { x: 1, y: 1 },
+        start: { x: sx + 0.5, y: sy + 0.5 }
+      };
+    }
+
     let exitC = cells[0];
     for (const c of cells) if (c.dist > exitC.dist) exitC = c;
 
     cells.sort((a, b) => a.dist - b.dist);
     const others = cells.filter(c => !(c.x === exitC.x && c.y === exitC.y));
-    const n = others.length;
+    const n = others.length || 1;
 
     const pick = (lo, hi) => {
       const a = Math.floor(n * lo);
       const b = Math.max(a + 1, Math.floor(n * hi));
-      return others[a + Math.floor(rand() * (b - a))];
+      const idx = Math.min(others.length - 1, a + Math.floor(rand() * (b - a)));
+      return others[idx] || others[0] || { x: sx, y: sy };
     };
 
     const gunC     = pick(0.08, 0.28);
@@ -686,6 +742,7 @@
     };
   }
 
+  // ============================ 音频 ============================
   function initAudio() {
     if (!audio) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -1013,31 +1070,250 @@
     }
   }
 
+  function startFireSound() {
+    if (!audio || audioLayers.fire) return;
+    try {
+      const t = audio.currentTime;
+      const sr = audio.sampleRate || 44100;
+
+      const len = Math.floor(sr * 4);
+      const buf = audio.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const p = i / len;
+        d[i] = (Math.random() * 2 - 1) * (0.7 + 0.3 * Math.sin(p * Math.PI * 2));
+      }
+      const src = audio.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+
+      const lp = audio.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 420;
+      lp.Q.value = 0.7;
+
+      const gain = audio.createGain();
+      gain.gain.value = 0;
+
+      src.connect(lp).connect(gain).connect(audio.destination);
+      src.start(t);
+
+      const len2 = Math.floor(sr * 3);
+      const buf2 = audio.createBuffer(1, len2, sr);
+      const d2 = buf2.getChannelData(0);
+      for (let i = 0; i < len2; i++) d2[i] = (Math.random() * 2 - 1);
+      const src2 = audio.createBufferSource();
+      src2.buffer = buf2;
+      src2.loop = true;
+      const bp = audio.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 1800;
+      bp.Q.value = 0.8;
+      const gain2 = audio.createGain();
+      gain2.gain.value = 0;
+      src2.connect(bp).connect(gain2).connect(audio.destination);
+      src2.start(t);
+
+      audioLayers.fire = { src, gain, lp, src2, gain2, bp };
+    } catch (e) {}
+  }
+
+  function updateFireSound() {
+    if (!audioLayers.fire || !audio) return;
+    try {
+      const t = audio.currentTime;
+      const amt = atmosphere.fireIntensity;
+      audioLayers.fire.gain.gain.setTargetAtTime(0.22 * amt, t, 0.15);
+      audioLayers.fire.gain2.gain.setTargetAtTime(0.08 * amt, t, 0.15);
+
+      audioLayers.fireCrackTimer -= 0.016;
+      if (amt > 0.05 && audioLayers.fireCrackTimer <= 0) {
+        audioLayers.fireCrackTimer = (0.05 + Math.random() * 0.25) / Math.max(0.2, amt);
+        playFireCrack();
+      }
+    } catch (e) {}
+  }
+
+  function playFireCrack() {
+    if (!audio) return;
+    try {
+      const t = audio.currentTime;
+      const src = audio.createBufferSource();
+      src.buffer = makeNoiseBuffer(0.04, p => Math.pow(1 - p, 5));
+      const hp = audio.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1200 + Math.random() * 2400;
+      const g = audio.createGain();
+      const vol = 0.08 * atmosphere.fireIntensity * (0.5 + Math.random() * 0.5);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+      src.connect(hp).connect(g).connect(audio.destination);
+      src.start(t); src.stop(t + 0.06);
+    } catch (e) {}
+  }
+
+  function startBreathSound() {
+    if (!audio || audioLayers.breath) return;
+    try {
+      const t = audio.currentTime;
+      const sr = audio.sampleRate || 44100;
+      const len = Math.floor(sr * 4);
+      const buf = audio.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const p = i / len;
+        let env = 0;
+        if (p < 0.35) {
+          const t2 = p / 0.35;
+          env = Math.pow(t2, 1.5) * (1 - t2 * 0.3);
+        } else if (p < 0.5) {
+          env = 0;
+        } else {
+          const t2 = (p - 0.5) / 0.5;
+          env = Math.pow(Math.sin(t2 * Math.PI), 1.3);
+        }
+        d[i] = (Math.random() * 2 - 1) * env;
+      }
+      const src = audio.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+
+      const bp = audio.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 480;
+      bp.Q.value = 1.2;
+
+      const gain = audio.createGain();
+      gain.gain.value = 0;
+
+      src.connect(bp).connect(gain).connect(audio.destination);
+      src.start(t);
+
+      audioLayers.breath = { src, gain, bp };
+    } catch (e) {}
+  }
+
+  function updateBreathSound(dt) {
+    if (!audioLayers.breath || !audio) return;
+    try {
+      audioLayers.breathTimer -= dt;
+      if (audioLayers.breathTimer <= 0) {
+        audioLayers.breathTimer = audioLayers.breathInterval;
+      }
+
+      let breathBase = 0.09;
+      let interval = 3.6;
+
+      if (state === "playing") {
+        let nearest = Infinity;
+        for (const e of enemies) {
+          const d = Math.hypot(player.x - e.x, player.y - e.y);
+          if (d < nearest) nearest = d;
+        }
+        if (nearest < 8) {
+          const urgency = Math.max(0, Math.min(1, (8 - nearest) / 8));
+          breathBase = 0.09 + urgency * 0.16;
+          interval = 3.6 - urgency * 2.2;
+        }
+      }
+      if (lockState === "inserted") {
+        breathBase = 0.28;
+        interval = 1.4;
+      }
+
+      audioLayers.breathInterval = interval;
+      const t = audio.currentTime;
+      audioLayers.breath.gain.gain.setTargetAtTime(breathBase, t, 0.4);
+    } catch (e) {}
+  }
+
+  function startBatHum() {
+    if (!audio || audioLayers.batHum) return;
+    try {
+      const t = audio.currentTime;
+      const sr = audio.sampleRate || 44100;
+      const len = Math.floor(sr * 2);
+      const buf = audio.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const p = i / len;
+        d[i] = (Math.random() * 2 - 1) * (0.5 + 0.5 * Math.sin(p * Math.PI * 18));
+      }
+      const src = audio.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+
+      const lp = audio.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 260;
+
+      const gain = audio.createGain();
+      gain.gain.value = 0;
+
+      src.connect(lp).connect(gain).connect(audio.destination);
+      src.start(t);
+
+      audioLayers.batHum = { src, gain, lp };
+    } catch (e) {}
+  }
+
+  function updateBatHum() {
+    if (!audioLayers.batHum || !audio) return;
+    try {
+      const t = audio.currentTime;
+      const density = Math.min(1, bats.length / 10);
+      audioLayers.batHum.gain.gain.setTargetAtTime(0.05 * density, t, 0.5);
+    } catch (e) {}
+  }
+
   function startAmbientAudio() {
     if (!audio || ambientNodes) return;
-    const windLen = Math.floor(audio.sampleRate * 4);
-    const windBuf = audio.createBuffer(1, windLen, audio.sampleRate);
-    const wd = windBuf.getChannelData(0);
-    for (let i = 0; i < windLen; i++) {
-      const p = i / windLen;
-      wd[i] = (Math.random() * 2 - 1) * (0.45 + 0.55 * Math.sin(p * Math.PI * 6));
-    }
-    const windSrc = audio.createBufferSource();
-    windSrc.buffer = windBuf;
-    windSrc.loop = true;
-    const windLp = audio.createBiquadFilter();
-    windLp.type = "lowpass"; windLp.frequency.value = 240;
-    const windGain = audio.createGain();
-    windGain.gain.value = 0.045;
-    windSrc.connect(windLp).connect(windGain).connect(audio.destination);
-    windSrc.start();
-    ambientNodes = { windSrc, windGain };
+    try {
+      startFireSound();
+      startBreathSound();
+      startBatHum();
+
+      const sr = audio.sampleRate || 44100;
+      const windLen = Math.floor(sr * 4);
+      const windBuf = audio.createBuffer(1, windLen, sr);
+      const wd = windBuf.getChannelData(0);
+      for (let i = 0; i < windLen; i++) {
+        const p = i / windLen;
+        wd[i] = (Math.random() * 2 - 1) * (0.45 + 0.55 * Math.sin(p * Math.PI * 6));
+      }
+      const windSrc = audio.createBufferSource();
+      windSrc.buffer = windBuf;
+      windSrc.loop = true;
+      const windLp = audio.createBiquadFilter();
+      windLp.type = "lowpass"; windLp.frequency.value = 240;
+      const windGain = audio.createGain();
+      windGain.gain.value = 0.045;
+      windSrc.connect(windLp).connect(windGain).connect(audio.destination);
+      windSrc.start();
+      ambientNodes = { windSrc, windGain };
+    } catch (e) {}
   }
 
   function stopAmbientAudio() {
-    if (!ambientNodes) return;
-    try { ambientNodes.windSrc.stop(); } catch (e) {}
-    ambientNodes = null;
+    try {
+      if (ambientNodes) {
+        try { ambientNodes.windSrc.stop(); } catch (e) {}
+        ambientNodes = null;
+      }
+      if (audioLayers.fire) {
+        try { audioLayers.fire.src.stop(); } catch (e) {}
+        try { audioLayers.fire.src2.stop(); } catch (e) {}
+        audioLayers.fire = null;
+      }
+      if (audioLayers.breath) {
+        try { audioLayers.breath.src.stop(); } catch (e) {}
+        audioLayers.breath = null;
+      }
+      if (audioLayers.batHum) {
+        try { audioLayers.batHum.src.stop(); } catch (e) {}
+        audioLayers.batHum = null;
+      }
+    } catch (e) {}
   }
 
   function playCreak() {
@@ -1234,13 +1510,12 @@
     if (Math.random() < 0.5) playWhisper();
     shake = Math.max(shake, 1.1);
 
-    // v2.2: 幻象独白（有冷却，避免刷屏）
     if (state === "playing" && wallVoiceCooldown <= 0) {
       wallVoiceCooldown = 6 + Math.random() * 5;
       const L = window.Lore;
       if (L) {
         const lines = isMarshalView() ? L.WALL_MARSHAL : L.WALL_ESCAPER;
-        if (Math.random() < 0.55) showSubtitle(L.pick(lines), 2200);
+        if (Math.random() < 0.55) showSubtitle(pickLine(lines), 2200);
       }
     }
   }
@@ -1267,9 +1542,15 @@
 
     batSpawnTimer -= dt;
     if (batSpawnTimer <= 0) {
-      if (bats.length < 4) spawnBat();
-      batSpawnTimer = 4 + Math.random() * 6;
+      const maxBats = 4 + Math.floor(atmosphere.batBoost * 10);
+      if (bats.length < maxBats) spawnBat();
+      const baseInterval = 4 + Math.random() * 6;
+      batSpawnTimer = baseInterval * (1 - atmosphere.batBoost * 0.75);
     }
+    if (atmosphere.batBoost > 0.4 && Math.random() < atmosphere.batBoost * 0.02) {
+      if (bats.length < 14) spawnBat();
+    }
+
     skullSpawnTimer -= dt;
     if (skullSpawnTimer <= 0) {
       if (skulls.length < 2) spawnSkull();
@@ -1283,7 +1564,7 @@
         b.phase += dt * 3;
         b.z = 0.12 + Math.sin(b.phase * 0.5) * 0.03;
         const d = Math.hypot(player.x - b.x, player.y - b.y);
-        if (d < 4.5) {
+        if (d < 4.5 + atmosphere.batBoost * 4) {
           b.state = "flying";
           b.flyTime = 0;
           const ang = Math.atan2(player.y - b.y, player.x - b.x) + (Math.random() - 0.5) * 0.7;
@@ -1401,6 +1682,7 @@
     wallNearbyPan = 0;
     escaperVisitedGun = false;
     escaperVisitedKey = false;
+    escaperVisitedCage = false;
 
     magazine = [];
     isReloading = false;
@@ -1520,13 +1802,37 @@
 
     casings.length = 0;
 
-    // v2.2: 剧情系统
-    fragmentsPicked = 0;
     countdownVoiceTimer = 0;
     countdownVoiceIndex = 0;
     wallVoiceCooldown = 0;
     hideSubtitle();
-    spawnFragments();
+
+    memoryTimer = 0;
+    memoryInterval = 18 + Math.random() * 14;
+    memoryCooldown = 12;
+    usedMemoryIndexes.clear();
+    memoryShotCount = 0;
+
+    storyFlags = {
+      seenGun: false,
+      pickedGun: false,
+      seenKey: false,
+      pickedKey: false,
+      seenExit: false,
+      insertedKnife: false,
+      cageOpened: false,
+      aiTookGun: false,
+      aiTookKnife: false,
+      aiReachCage: false
+    };
+
+    atmosphere.petals = 0;
+    atmosphere.lightRadius = 11.5;
+    atmosphere.fireIntensity = 0;
+    atmosphere.batBoost = 0;
+    atmosphere.swayX = 0;
+    atmosphere.swayY = 0;
+    initPetals();
 
     lockState = "idle";
     lockTimer = 0;
@@ -1561,17 +1867,59 @@
     hud.classList.add("is-visible");
     crosshair.classList.add("is-visible");
     mobileControls.classList.add("is-visible");
-    if (fragmentCounter && fragments.length > 0 && !multiplayer) {
-      fragmentCounter.hidden = false;
-    }
+    document.body.classList.add("is-playing");
+
     initAudio();
     primeVoiceAudio();
     startAmbientAudio();
-    if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-      canvas.requestPointerLock?.();
-    }
 
-    // v2.2: 开局独白
+    const introKey = "ss_hero_intro_seen_v1";
+    // v3: 每次单人开局都播放英雄过场（跳过按钮 / Esc / Space / Enter 均可跳过）
+    if (!multiplayer && window.HeroIntro) {
+      isCutscenePaused = true;
+      document.body.classList.add("is-intro-running");
+
+      const onIntroDone = () => {
+        isCutscenePaused = false;
+        // 剧情结束 / 跳过后，正式开始计时
+        gameStartTime = performance.now();
+        document.body.classList.remove("is-intro-running");
+
+        // 剧情后给玩家一句开局提示
+        if (isDailyChallenge) {
+          const label = challengeMode === "nightmare"
+            ? "每日挑战 · 难度 2 · 噩梦"
+            : "每日挑战 · 难度 1 · 地狱";
+          showMessage(`${label} · 种子 ${dailySeed}`, 3400);
+        } else if (currentRole === "marshal") {
+          showMessage(`少帅模式 · 5 秒后开始追，别让他跑掉！`, 3400);
+        } else if (currentDifficulty === "hell") {
+          showMessage(`地狱模式 · 两个少帅正在远处逼近`, 3400);
+        } else if (currentDifficulty === "nightmare") {
+          showMessage(`噩梦模式 · 先找枪，再找刀`, 2800);
+        } else {
+          showMessage(`少帅就在你身后！5 秒内快跑！`, 4500);
+        }
+
+        // 剧情结束后尝试自动锁定鼠标
+        if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+          setTimeout(() => {
+            if (state === "playing" && document.pointerLockElement !== canvas) {
+              canvas.requestPointerLock?.();
+            }
+          }, 300);
+        }
+      };
+
+      try {
+        window.HeroIntro.play(onIntroDone);
+      } catch (e) {
+        // 出错就直接跳过剧情
+        onIntroDone();
+      }
+
+      return;
+    }
     playIntroCutscene();
 
     if (multiplayer) {
@@ -1592,6 +1940,14 @@
     } else {
       window.setTimeout(() => showMessage(`少帅就在你身后！5 秒内快跑！`, 4500), 3600);
     }
+
+    if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      window.setTimeout(() => {
+        if (state === "playing" && document.pointerLockElement !== canvas) {
+          canvas.requestPointerLock?.();
+        }
+      }, 3800);
+    }
   }
 
   function formatDuration(ms) {
@@ -1610,10 +1966,16 @@
     mobileControls.classList.remove("is-visible");
     ammoCounter.classList.remove("is-visible");
     if (topBar) topBar.style.display = "";
-    if (fragmentCounter) fragmentCounter.hidden = true;
+    document.body.classList.remove("is-playing");
+    document.body.classList.remove("is-intro-running");
+
     if (cutscene) cutscene.classList.remove("is-visible");
-hideSubtitle();
-isCutscenePaused = false;
+    hideSubtitle();
+    isCutscenePaused = false;
+    if (window.HeroIntro && typeof window.HeroIntro.isRunning === "function" && window.HeroIntro.isRunning()) {
+      try { window.HeroIntro.end(); } catch (e) {}
+    }
+
     triggerHeld = false;
     autoFiring = false;
     isReloading = false;
@@ -1637,7 +1999,7 @@ isCutscenePaused = false;
 
     if (isDailyChallenge && localWin && currentRole === "escaper" && !submittedThisRun) {
       submittedThisRun = true;
-      if (window.Account && Account.isLoggedIn()) {
+      if (window.Account && Account.isLoggedIn && Account.isLoggedIn()) {
         Account.submitScore(challengeMode, dailySeed, dailyDay, elapsedMs)
           .catch((err) => {
             setTimeout(() => showMessage("成绩提交失败：" + err.message, 3500), 600);
@@ -1684,21 +2046,24 @@ isCutscenePaused = false;
       return;
     }
 
-    const L = window.Lore;
+    // ★ 修复：用安全的方式获取结局文案
+    const L = window.Lore || {};
     if (currentRole === "marshal") {
-      const end = localWin ? L.ENDING_MARSHAL_WIN : L.ENDING_MARSHAL_LOSE;
-      resultKicker.textContent = end.kicker;
-      resultTitle.textContent = end.title;
-      resultCopy.textContent = end.text;
+      const end = localWin ? (L.ENDING_MARSHAL_WIN || { kicker: "抓住了", title: "今晚，你赢了", text: "" })
+                           : (L.ENDING_MARSHAL_LOSE || { kicker: "逃脱了", title: "他跑了", text: "" });
+      resultKicker.textContent = end.kicker || "";
+      resultTitle.textContent = end.title || "";
+      resultCopy.textContent = end.text || "";
       resultImage.src = localWin ? "assets/doubao.jpg" : "assets/doubao-normal.png";
       resultImage.alt = localWin ? "恐怖的少帅" : "正常的少帅";
     } else {
-      const end = localWin ? L.ENDING_ESCAPER_WIN : L.ENDING_ESCAPER_LOSE;
-      resultKicker.textContent = end.kicker;
-      resultTitle.textContent = end.title;
-      let text = end.text;
+      const end = localWin ? (L.ENDING_ESCAPER_WIN || { kicker: "你赢了", title: "天亮之前", text: "" })
+                           : (L.ENDING_ESCAPER_LOSE || { kicker: "游戏结束", title: "他抓到你了", text: "" });
+      resultKicker.textContent = end.kicker || "";
+      resultTitle.textContent = end.title || "";
+      let text = end.text || "";
       if (isDailyChallenge && localWin) {
-        if (window.Account && Account.isLoggedIn()) text += "\n（成绩已提交到排行榜）";
+        if (window.Account && Account.isLoggedIn && Account.isLoggedIn()) text += "\n（成绩已提交到排行榜）";
         else text += "\n（未登录，成绩未记录）";
       }
       resultCopy.textContent = text;
@@ -1721,159 +2086,34 @@ isCutscenePaused = false;
   }
   function hideMessage() { message.classList.remove("is-visible"); }
 
-  // ============================ v2.2: 剧情系统 ============================
-  // ============================ v2.3: 剧情音频系统 ============================
-  const LoreAudio = (() => {
-    const base = "assets/audio/lore/";
-    const cache = new Map();
-    let currentAudio = null;
-
-    function getPath(name, isMarshal) {
-      const dir = isMarshal ? "marshal/" : "female/";
-      return base + dir + name + ".wav";
-    }
-
-    function play(name, isMarshal) {
-      const path = getPath(name, isMarshal);
-      if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-      }
-      let audio = cache.get(path);
-      if (!audio) {
-        audio = new Audio(path);
-        cache.set(path, audio);
-      }
-      audio.currentTime = 0;
-      audio.play().catch(() => {});
-      currentAudio = audio;
-    }
-
-    function stop() {
-      if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        currentAudio = null;
-      }
-    }
-
-    // 根据文本内容找对应的音频文件名
-    function findName(text, isMarshal) {
-      if (!text) return null;
-      const dir = isMarshal ? "marshal" : "female";
-      // 精确匹配表
-      const table = {
-        // 少帅视角
-        "他又醒了。他又要跑。": "intro_marshal_01",
-        "我认得这条路——是我当年走过的。": "intro_marshal_02",
-        "他以为他能跑掉。": "intro_marshal_03",
-        "可他忘了：我就是他。": "intro_marshal_04",
-        "他藏进铁笼，我就站外面。": "intro_marshal_05",
-        "站一整夜。像当年一样。": "intro_marshal_06",
-        "他也捡到枪了。": "pickup_gun_marshal_01",
-        "他以为能挡住我？": "pickup_gun_marshal_02",
-        "他连自己都挡不住。": "pickup_gun_marshal_03",
-        "那把小刀……": "pickup_knife_marshal_01",
-        "是我当年藏起来的。": "pickup_knife_marshal_02",
-        "他拿走了。他还记得她。": "pickup_knife_marshal_03",
-        "他还在笑。": "wall_marshal_01",
-        "他为什么还在笑？": "wall_marshal_02",
-        "火里那个人也是这么笑的。": "wall_marshal_03",
-        "别笑了……求你了。": "wall_marshal_04",
-        "是我害了他。": "wall_marshal_05",
-        "我不配看那张脸。": "wall_marshal_06",
-        "他在里面数数。": "countdown_marshal_01",
-        "他每次都数。": "countdown_marshal_02",
-        "他知道我在外面。": "countdown_marshal_03",
-        "他不想看我。": "countdown_marshal_04",
-        "他恨我。": "countdown_marshal_05",
-        "我也恨我自己。": "countdown_marshal_06",
-        // 女性视角
-        "又是这里。又是这个院子。": "intro_escaper_01",
-        "他在追我。他一直都在追我。": "intro_escaper_02",
-        "我不能停下。小洛让我活下去。": "intro_escaper_03",
-        "找到枪，找到刀，把那扇锁关上。": "intro_escaper_04",
-        "只要我进了铁笼，他就进不来。": "intro_escaper_05",
-        "撑过 30 秒。天亮了就好。": "intro_escaper_06",
-        "一把枪……我不太会用。": "pickup_gun_escaper_01",
-        "但如果他也有怕的东西……": "pickup_gun_escaper_02",
-        "也许他就能停下来。": "pickup_gun_escaper_03",
-        "小洛的刀。她削苹果的姿势很好看。": "pickup_knife_escaper_01",
-        "我不是要开锁。": "pickup_knife_escaper_02",
-        "我要把那扇门，关死。": "pickup_knife_escaper_03",
-        "那是他……": "wall_escaper_01",
-        "不，那是……我？": "wall_escaper_02",
-        "别看他的眼睛。": "wall_escaper_03",
-        "别变成他。": "wall_escaper_04",
-        "小洛，帮帮我。": "wall_escaper_05",
-        "我不想变成那个东西。": "wall_escaper_06",
-        "1 秒……2 秒……": "countdown_escaper_01",
-        "像那年火里一样。": "countdown_escaper_02",
-        "小洛说，撑过去就好。": "countdown_escaper_03",
-        "他在敲铁笼。别理他。": "countdown_escaper_04",
-        "快到了，快到了。": "countdown_escaper_05",
-        "天快亮了。": "countdown_escaper_06",
-        // DIARY
-        "小洛发烧了。我把她放进铁笼里，因为那是最安全的地方。锁是我亲手扣上的，我说，等哥哥回来。": "diary_01",
-        "我回来的时候，院子在烧。钥匙掉了。我掰那根锁，手指头全断了。小洛在里面，隔着栏杆看我，她还在笑。她说，哥哥，不要怕。": "diary_02",
-        "\"哥哥，你要活下去。\" —— 那是她最后一句话。": "diary_03",
-        "我不知道我是怎么活下来的。有时候我觉得，那个从火里爬出来的人不是我。是一个更坏的东西。": "diary_04",
-        "他每天晚上都来找我。他长得和我一模一样，但眼睛里全是灰。他说，我们一起下地狱吧。我说不。他就一直追。": "diary_05",
-        "我又见到那个铁笼了。还在那儿。我每天做梦都想再进去一次——不是去找她，而是去把那扇门，好好关上。": "diary_06",
-        "小洛有一把小刀，削苹果用的。我把它藏了很久。现在我想把它插进那扇锁里——不是为了打开，是为了关死。": "diary_07",
-        "有把枪。我不太会用。但每次听见他的脚步声，我都会想：如果我也有他要的东西，他是不是就能停下来了。": "diary_08",
-        "锁转动的声音，像当年火里那样。我数着——一秒，两秒……小洛说过，撑过去就好。": "diary_09",
-        "如果我进了铁笼，他只能站在外面。一整夜。他不会离开，但他也进不来。这样就好。": "diary_10",
-        // FRAGMENTS
-        "院子最里头有一棵槐树。小洛在树下睡午觉，头发上落满了花。": "fragment_01",
-        "她怕黑。所以我把铁笼里的灯留着，一直留着。": "fragment_02",
-        "她学写字，第一个会写的字是「哥」。": "fragment_03",
-        "她生日那天想要一把刀。我没买。现在想想，买就好了。": "fragment_04",
-        "火起来的时候，我在两条街外。我跑回来了。我跑得很快。": "fragment_05",
-        "后来警察问我，钥匙呢。我说丢了。其实它一直在我口袋里。": "fragment_06",
-        "我不敢看铁笼。可我又每天都想回去看。": "fragment_07",
-        "小洛最喜欢的歌，是一首很老的童谣。我不敢听。": "fragment_08",
-        "我对医生说，我没事。他说你分裂了。我说那正好，一半的我还在陪她。": "fragment_09",
-        "如果人生能重来，我还是会锁那扇门。但我会先把钥匙吞下去。": "fragment_10",
-      };
-      return table[text] || null;
-    }
-
-    return { play, stop, findName };
-  })();
-
   function showCutscene(title, text, duration = 3000) {
     if (!cutscene) return;
     cutsceneTitle.textContent = title || "";
     cutsceneText.textContent = text || "";
     cutscene.classList.add("is-visible");
 
-    // 剧情期间暂停游戏
     isCutscenePaused = true;
+
+    for (const k of Object.keys(input)) input[k] = false;
+    triggerHeld = false;
+    autoFiring = false;
 
     window.clearTimeout(cutsceneTimer);
     cutsceneTimer = window.setTimeout(() => {
       cutscene.classList.remove("is-visible");
       isCutscenePaused = false;
     }, duration);
-    // v2.3: 同步播放剧情音频
-    const isMarshal = isMarshalView();
-    const name = LoreAudio.findName(text, isMarshal);
-    if (name) LoreAudio.play(name, isMarshal);
   }
 
   function showSubtitle(text, duration = 2600) {
     if (!subtitle) return;
+    if (!text) return;
     subtitle.textContent = text;
     subtitle.classList.add("is-visible");
     window.clearTimeout(subtitleTimer);
     subtitleTimer = window.setTimeout(() => {
       subtitle.classList.remove("is-visible");
     }, duration);
-    // v2.3: 同步播放剧情音频
-    const isMarshal = isMarshalView();
-    const name = LoreAudio.findName(text, isMarshal);
-    if (name) LoreAudio.play(name, isMarshal);
   }
 
   function hideSubtitle() {
@@ -1885,57 +2125,41 @@ isCutscenePaused = false;
     return role === "marshal";
   }
 
-  function spawnFragments() {
-    fragments = [];
-    fragmentsPicked = 0;
-    if (!window.Lore) return;
-
-    const cands = [];
-    for (let y = 1; y < MAP_H - 1; y++) {
-      for (let x = 1; x < MAP_W - 1; x++) {
-        if (map[y][x] !== 0) continue;
-        if (x === Math.floor(player.x) && y === Math.floor(player.y)) continue;
-        if (gunCellRef && x === gunCellRef.x && y === gunCellRef.y) continue;
-        if (keyCellRef && x === keyCellRef.x && y === keyCellRef.y) continue;
-        if (x === exitCell.x && y === exitCell.y) continue;
-        cands.push({ x: x + 0.5, y: y + 0.5 });
-      }
-    }
-    for (let i = cands.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cands[i], cands[j]] = [cands[j], cands[i]];
-    }
-    const count = Math.min(10, cands.length);
-    for (let i = 0; i < count; i++) {
-      fragments.push({
-        x: cands[i].x,
-        y: cands[i].y,
-        taken: false,
-        index: i
-      });
-    }
-    if (fragmentCounter) {
-      fragmentCounter.hidden = (count === 0);
-      if (fragmentCount) fragmentCount.textContent = "0";
-    }
-  }
-
-  function checkFragmentPickup() {
+  function checkMemoryFlash(dt) {
+    if (multiplayer) return;
+    if (isCutscenePaused) return;
     if (isMarshalView()) return;
-    for (const f of fragments) {
-      if (f.taken) continue;
-      const d = Math.hypot(player.x - f.x, player.y - f.y);
-      if (d < 0.55) {
-        f.taken = true;
-        fragmentsPicked++;
-        if (fragmentCount) fragmentCount.textContent = String(fragmentsPicked);
-        const frag = window.Lore.FRAGMENTS[f.index % window.Lore.FRAGMENTS.length];
-        if (frag) {
-          showCutscene("小洛 · " + frag.title, frag.text, 4200);
-          playTone(760, 0.14, "triangle", 0.06);
-          window.setTimeout(() => playTone(520, 0.28, "triangle", 0.05), 120);
-        }
-      }
+    if (!window.Lore || !window.Lore.FRAGMENTS) return;
+    if (state !== "playing") return;
+
+    if (memoryCooldown > 0) {
+      memoryCooldown -= dt;
+      return;
+    }
+
+    memoryTimer += dt;
+    if (memoryTimer < memoryInterval) return;
+
+    memoryTimer = 0;
+    memoryInterval = 18 + Math.random() * 14;
+
+    const total = window.Lore.FRAGMENTS.length;
+    if (usedMemoryIndexes.size >= total) return;
+
+    let idx;
+    let guard = 0;
+    do {
+      idx = Math.floor(Math.random() * total);
+      guard++;
+    } while (usedMemoryIndexes.has(idx) && guard < 50);
+
+    usedMemoryIndexes.add(idx);
+    memoryShotCount++;
+
+    const frag = window.Lore.FRAGMENTS[idx];
+    if (frag && frag.text) {
+      showSubtitle(frag.text, 5200);
+      playTone(520, 0.1, "sine", 0.03);
     }
   }
 
@@ -1943,9 +2167,63 @@ isCutscenePaused = false;
     const L = window.Lore;
     if (!L) return;
     if (isMarshalView()) {
-      showCutscene("少帅", L.pick(L.INTRO_MARSHAL), 3600);
+      showCutscene("少帅", pickLine(L.STORY_INTRO_MARSHAL), 3600);
     } else {
-      showCutscene("小锦", L.pick(L.INTRO_ESCAPER), 3600);
+      showCutscene("小锦", pickLine(L.STORY_INTRO_ESCAPER), 3600);
+    }
+  }
+
+  // ★ 关键修复：所有 L.pick() 换成 pickLine()，并加 try/catch 防护
+  function checkProgressStory() {
+    if (!window.Lore) return;
+    if (multiplayer) return;
+    if (isCutscenePaused) return;
+
+    const L = window.Lore;
+    const isMarshal = isMarshalView();
+
+    // ===== 少帅模式：AI 到达铁笼前的剧情 =====
+    if (isMarshal) {
+      const ai = enemies[0];
+      if (ai && storyFlags.aiTookKnife && !storyFlags.aiReachCage) {
+        const d = Math.hypot(ai.x - (exitCell.x + 0.5), ai.y - (exitCell.y + 0.5));
+        if (d < 4.5) {
+          storyFlags.aiReachCage = true;
+          const line = pickLine(L.STORY_ESCAPER_REACH_CAGE_MARSHAL);
+          if (line) showCutscene("—— 他到了铁笼", line, 4500);
+        }
+      }
+      return;
+    }
+
+    // ===== 逃离者模式：自己的进度剧情 =====
+    if (!storyFlags.seenGun && !hasGun && !gunPicked && gunPosition) {
+      const d = Math.hypot(player.x - gunPosition.x, player.y - gunPosition.y);
+      if (d < 5) {
+        storyFlags.seenGun = true;
+        const line = pickLine(L.STORY_SEE_GUN_ESCAPER);
+        if (line) showCutscene("—— 枪", line, 4200);
+        return;
+      }
+    }
+    if (storyFlags.pickedGun && !storyFlags.seenKey && !hasKey &&
+        lockState === "idle" && keyPosition) {
+      const d = Math.hypot(player.x - keyPosition.x, player.y - keyPosition.y);
+      if (d < 5) {
+        storyFlags.seenKey = true;
+        const line = pickLine(L.STORY_SEE_KNIFE_ESCAPER);
+        if (line) showCutscene("—— 刀", line, 4200);
+        return;
+      }
+    }
+    if (storyFlags.pickedKey && !storyFlags.seenExit && lockState === "idle") {
+      const d = Math.hypot(player.x - (exitCell.x + 0.5), player.y - (exitCell.y + 0.5));
+      if (d < 6) {
+        storyFlags.seenExit = true;
+        const line = pickLine(L.STORY_SEE_CAGE_ESCAPER);
+        if (line) showCutscene("—— 铁笼", line, 4200);
+        return;
+      }
     }
   }
 
@@ -2266,6 +2544,16 @@ isCutscenePaused = false;
         e.repathTimer = 0;
       }
     }
+
+    if (!multiplayer && !storyFlags.insertedKnife && window.Lore) {
+      storyFlags.insertedKnife = true;
+      const line = pickLine(window.Lore.STORY_INSERT_KNIFE_ESCAPER);
+      if (line) {
+        window.setTimeout(() => {
+          showCutscene("—— 插进锁孔", line, 4200);
+        }, 900);
+      }
+    }
   }
 
   function updateSingleEnemyShaoshuai(e, dt, preset) {
@@ -2435,11 +2723,21 @@ isCutscenePaused = false;
         Math.hypot(e.x - gunPosition.x, e.y - gunPosition.y) < 0.9) {
       escaperVisitedGun = true;
       e.repathTimer = 0;
+      if (window.Lore && !storyFlags.aiTookGun) {
+        storyFlags.aiTookGun = true;
+        const line = pickLine(window.Lore.STORY_ESCAPER_PICK_GUN_MARSHAL);
+        if (line) window.setTimeout(() => showCutscene("—— 他拿起了枪", line, 4500), 400);
+      }
     }
     if (!escaperVisitedKey && !hasKey && lockState === "idle" &&
         Math.hypot(e.x - keyPosition.x, e.y - keyPosition.y) < 0.9) {
       escaperVisitedKey = true;
       e.repathTimer = 0;
+      if (window.Lore && !storyFlags.aiTookKnife) {
+        storyFlags.aiTookKnife = true;
+        const line = pickLine(window.Lore.STORY_ESCAPER_PICK_KNIFE_MARSHAL);
+        if (line) window.setTimeout(() => showCutscene("—— 他拿起了刀", line, 4500), 600);
+      }
     }
 
     if (escapeGraceTimer <= 0 && distToPlayer < 0.5) {
@@ -2724,13 +3022,15 @@ isCutscenePaused = false;
       magazine = generateMagazine();
       updateAmmoUI();
       objectiveText.textContent = "再找到那把刀";
-      showMessage("捡到手枪，14 发子弹。左键开火，F 换弹", 3200);
+      showMessage("捡到手枪，16 发子弹。左键开火，F 换弹", 3200);
       playTone(520, 0.1, "square", 0.06);
       window.setTimeout(() => playTone(700, 0.12, "square", 0.05), 90);
+
       const L = window.Lore;
-      if (L) {
-        const lines = isMarshalView() ? L.PICKUP_GUN_MARSHAL : L.PICKUP_GUN_ESCAPER;
-        showSubtitle(L.pick(lines), 3200);
+      if (L && !multiplayer && !storyFlags.pickedGun) {
+        storyFlags.pickedGun = true;
+        const line = pickLine(L.STORY_PICK_GUN_ESCAPER);
+        if (line) window.setTimeout(() => showCutscene("—— 你拿起了枪", line, 4500), 400);
       }
     }
 
@@ -2750,10 +3050,12 @@ isCutscenePaused = false;
           }
         }
         rageFlash = Math.max(rageFlash, 0.7);
+
         const L2 = window.Lore;
-        if (L2) {
-          const lines = isMarshalView() ? L2.PICKUP_KNIFE_MARSHAL : L2.PICKUP_KNIFE_ESCAPER;
-          window.setTimeout(() => showSubtitle(L2.pick(lines), 3400), 2600);
+        if (L2 && !multiplayer && !storyFlags.pickedKey) {
+          storyFlags.pickedKey = true;
+          const line = pickLine(L2.STORY_PICK_KNIFE_ESCAPER);
+          if (line) window.setTimeout(() => showCutscene("—— 你拿起了刀", line, 4500), 800);
         }
       }
     }
@@ -2768,8 +3070,8 @@ isCutscenePaused = false;
           const L = window.Lore;
           if (L) {
             const lines = isMarshalView() ? L.COUNTDOWN_MARSHAL : L.COUNTDOWN_ESCAPER;
-            const idx = countdownVoiceIndex % lines.length;
-            showSubtitle(lines[idx], 2400);
+            const line = pickLine(lines);
+            if (line) showSubtitle(line, 2400);
             countdownVoiceIndex++;
           }
         }
@@ -2783,6 +3085,12 @@ isCutscenePaused = false;
           showMessage("锁开了！", 1600);
           playTone(118, 0.65, "sawtooth", 0.05);
           playTone(280, 0.4, "triangle", 0.05);
+
+          if (!storyFlags.cageOpened && window.Lore) {
+            storyFlags.cageOpened = true;
+            const line = pickLine(window.Lore.STORY_CAGE_OPEN_ESCAPER);
+            if (line) showCutscene("—— 铁笼开了", line, 3800);
+          }
         }
       }
 
@@ -2793,6 +3101,7 @@ isCutscenePaused = false;
     }
   }
 
+  // ============================ 渲染 ============================
   function castRay(angle) {
     const dx = Math.cos(angle), dy = Math.sin(angle);
     let mx = Math.floor(player.x), my = Math.floor(player.y);
@@ -3217,6 +3526,145 @@ isCutscenePaused = false;
     ctx.restore();
   }
 
+  function initPetals() {
+    petals.length = 0;
+    for (let i = 0; i < PETAL_COUNT; i++) {
+      petals.push({
+        x: Math.random(),
+        y: Math.random(),
+        vy: 0.05 + Math.random() * 0.08,
+        phase: Math.random() * Math.PI * 2,
+        speed: 1.5 + Math.random() * 1.5,
+        size: 3 + Math.random() * 5,
+        rot: Math.random() * Math.PI * 2,
+        vrot: (Math.random() - 0.5) * 2.2,
+        alpha: 0.35 + Math.random() * 0.5
+      });
+    }
+  }
+
+  function updateAtmosphere(dt) {
+    let targetPetals = 0;
+    let targetLight = 11.5;
+    let targetFire = 0;
+    let targetBatBoost = 0;
+
+    if (!multiplayer && currentRole === "escaper") {
+      if (!storyFlags.seenGun) {
+        targetPetals = 1.0;
+        targetLight = 9.5;
+      }
+      if (storyFlags.seenGun && !storyFlags.pickedGun) {
+        targetPetals = 0.5;
+        targetLight = 7.5;
+      }
+      if (storyFlags.pickedGun && !storyFlags.seenExit) {
+        targetPetals = 0;
+        targetLight = 5.5;
+      }
+      if (storyFlags.seenExit && lockState === "idle") {
+        targetLight = 4.5;
+        targetFire = 0.35;
+        targetBatBoost = 0.55;
+      }
+      if (lockState === "inserted") {
+        targetLight = 4.0;
+        targetFire = 0.85;
+        targetBatBoost = 1.0;
+      }
+      if (lockState === "open") {
+        targetLight = 5.5;
+        targetFire = 0.3;
+        targetBatBoost = 0.3;
+      }
+    }
+
+    const k = 1 - Math.pow(0.08, dt);
+    atmosphere.petals += (targetPetals - atmosphere.petals) * k;
+    atmosphere.lightRadius += (targetLight - atmosphere.lightRadius) * k;
+    atmosphere.fireIntensity += (targetFire - atmosphere.fireIntensity) * k;
+    atmosphere.batBoost += (targetBatBoost - atmosphere.batBoost) * k;
+
+    const now = performance.now();
+    if (!multiplayer && currentRole === "escaper" &&
+        storyFlags.seenGun && !storyFlags.pickedGun) {
+      atmosphere.swayX = Math.sin(now / 150) * 4.5 + Math.sin(now / 47) * 1.8;
+      atmosphere.swayY = Math.cos(now / 210) * 3 + Math.cos(now / 63) * 1.2;
+    } else if (lockState === "inserted") {
+      atmosphere.swayX = Math.sin(now / 80) * 2.4;
+      atmosphere.swayY = Math.cos(now / 110) * 1.6;
+    } else {
+      atmosphere.swayX *= 0.9;
+      atmosphere.swayY *= 0.9;
+    }
+
+    if (atmosphere.petals > 0.01) {
+      for (const p of petals) {
+        p.phase += dt * p.speed;
+        p.x += (Math.sin(p.phase) * 0.02) * dt;
+        p.y += p.vy * dt;
+        p.rot += p.vrot * dt;
+        if (p.y > 1.08) {
+          p.y = -0.08;
+          p.x = Math.random();
+        }
+        if (p.x < -0.08) p.x = 1.08;
+        if (p.x > 1.08) p.x = -0.08;
+      }
+    }
+  }
+
+  function renderPetals(W, H) {
+    if (atmosphere.petals <= 0.01) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    for (const p of petals) {
+      ctx.globalAlpha = p.alpha * atmosphere.petals;
+      ctx.fillStyle = "#f0d9a8";
+      ctx.save();
+      ctx.translate(p.x * W, p.y * H);
+      ctx.rotate(p.rot);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, p.size * 0.55, p.size * 1.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function renderAtmosphereTint(W, H) {
+    const now = performance.now();
+
+    if (!multiplayer && currentRole === "escaper" && !storyFlags.seenGun) {
+      ctx.fillStyle = `rgba(200, 140, 60, ${0.09 * atmosphere.petals})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (atmosphere.fireIntensity > 0.01) {
+      const flicker = 0.82 + Math.sin(now / 70) * 0.18 + Math.sin(now / 190) * 0.08;
+      const fireAmt = atmosphere.fireIntensity * flicker;
+
+      const g = ctx.createRadialGradient(
+        W / 2, H * 1.05, W * 0.15,
+        W / 2, H * 1.05, W * 1.0
+      );
+      g.addColorStop(0, `rgba(255, 120, 30, ${0.45 * fireAmt})`);
+      g.addColorStop(0.5, `rgba(255, 70, 15, ${0.28 * fireAmt})`);
+      g.addColorStop(1, `rgba(120, 30, 5, ${0.12 * fireAmt})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      const edge = ctx.createLinearGradient(0, H, 0, H * 0.3);
+      edge.addColorStop(0, `rgba(255, 150, 50, ${0.35 * fireAmt})`);
+      edge.addColorStop(1, `rgba(255, 100, 20, 0)`);
+      ctx.fillStyle = edge;
+      ctx.fillRect(0, H * 0.3, W, H * 0.7);
+
+      ctx.fillStyle = `rgba(200, 60, 10, ${0.05 * fireAmt})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
   function renderWorld() {
     const W = canvas.width, H = canvas.height;
 
@@ -3226,8 +3674,8 @@ isCutscenePaused = false;
     ctx.fillStyle = "#050403";
     ctx.fillRect(0, 0, W, H);
 
-    const shakeX = shake ? (Math.random() - 0.5) * shake * 3.0 : 0;
-    const shakeY = shake ? (Math.random() - 0.5) * shake * 2.1 : 0;
+    const shakeX = (shake ? (Math.random() - 0.5) * shake * 3.0 : 0) + atmosphere.swayX;
+    const shakeY = (shake ? (Math.random() - 0.5) * shake * 2.1 : 0) + atmosphere.swayY;
     const pitchShift = (player.pitch - viewKick * 0.16) * H * 0.78;
     const horizonY = H / 2 - pitchShift + shakeY;
     const fov = getFov();
@@ -3249,7 +3697,11 @@ isCutscenePaused = false;
       const corr = hit.distance * Math.cos(ra - player.angle);
       const wallH = Math.min(H * 3, H / corr);
       const top = horizonY - wallH / 2;
-      const distShade = Math.max(0.13, 1 - corr / 11.5);
+
+      const lightR = Math.max(4, atmosphere.lightRadius);
+      const t = Math.min(1, corr / lightR);
+      const distShade = Math.max(0.04, 1 - Math.pow(t, 1.35));
+
       const seam = Math.min(hit.texture, 1 - hit.texture);
       const plank = seam < 0.035 ? 0.62 : 1;
       const sideShade = hit.side ? 0.72 : 1;
@@ -3278,10 +3730,6 @@ isCutscenePaused = false;
     if (currentRole === "escaper") {
       renderSprite(keyPosition.x, keyPosition.y, "key", horizonY);
       renderSprite(gunPosition.x, gunPosition.y, "gun", horizonY);
-      for (const f of fragments) {
-        if (f.taken) continue;
-        renderSprite(f.x, f.y, "fragment", horizonY);
-      }
     }
 
     renderCasings(horizonY);
@@ -3350,9 +3798,60 @@ isCutscenePaused = false;
       ctx.fillRect(0, 0, W, H);
     }
 
+    {
+      let nearestBat = Infinity;
+      for (const b of bats) {
+        const d = Math.hypot(b.x - player.x, b.y - player.y);
+        if (d < nearestBat) nearestBat = d;
+      }
+      if (nearestBat < 3.5) {
+        const prox = 1 - nearestBat / 3.5;
+        const flick = 0.7 + Math.sin(performance.now() / 90) * 0.3;
+        ctx.fillStyle = `rgba(140, 20, 20, ${prox * 0.14 * flick})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    if (lockState === "inserted" && state === "playing") {
+      const now = performance.now();
+      const pulse = 0.42 + Math.sin(now / 220) * 0.12;
+      const prog = Math.min(1, (LOCK_DURATION - lockTimer) / LOCK_DURATION);
+
+      const g = ctx.createRadialGradient(
+        W / 2, H / 2, W * 0.22,
+        W / 2, H / 2, W * 0.85
+      );
+      g.addColorStop(0, "rgba(80,0,0,0)");
+      g.addColorStop(0.6, `rgba(120,10,10,${pulse * 0.35})`);
+      g.addColorStop(1, `rgba(90,0,0,${pulse * 0.75})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      if (prog > 0.5 && Math.random() < 0.03 + prog * 0.05) {
+        ctx.fillStyle = `rgba(200, 40, 20, ${0.06 + prog * 0.06})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    if (!multiplayer && state === "playing") {
+      let nearestE = Infinity;
+      for (const e of enemies) {
+        const d = Math.hypot(player.x - e.x, player.y - e.y);
+        if (d < nearestE) nearestE = d;
+      }
+      if (nearestE < 5 && !graceTimer) {
+        const prox = 1 - nearestE / 5;
+        ctx.fillStyle = `rgba(20, 0, 0, ${prox * 0.28})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
     if (currentRole === "escaper" && hasGun && state === "playing") {
       renderViewModel(horizonY);
     }
+
+    renderPetals(W, H);
+    renderAtmosphereTint(W, H);
 
     renderCrosshair();
 
@@ -3444,6 +3943,7 @@ isCutscenePaused = false;
     const scale = H / (dist * Math.cos(rel));
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
     if ((zBuffer[col] || Infinity) < dist - 0.2) return;
+    if (!isFinite(scale) || scale <= 0) return;
 
     ctx.save();
     if (kind === "key") {
@@ -3463,17 +3963,6 @@ isCutscenePaused = false;
       const sy = horizonY + (0.5 - h) * scale;
       const size = Math.max(22, Math.min(H * 1.5, scale * 0.40));
       drawGunSprite(sx, sy, size * 0.95);
-    } else if (kind === "fragment") {
-      const bob = Math.sin(performance.now() / 320) * 0.06;
-      const h = 0.24 + bob;
-      const sy = horizonY + (0.5 - h) * scale;
-      const size = Math.max(14, Math.min(H * 1.0, scale * 0.30));
-      ctx.shadowColor = "#c9a878";
-      ctx.shadowBlur = 14;
-      ctx.font = `${size}px system-ui`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("📖", sx, sy);
     }
     ctx.restore();
   }
@@ -3490,6 +3979,7 @@ isCutscenePaused = false;
     const focal = W / (2 * Math.tan(fov / 2));
     const sx = W / 2 + Math.tan(rel) * focal;
     const scale = H / (dist * Math.cos(rel));
+    if (!isFinite(scale) || scale <= 0) return;
     const col = Math.max(0, Math.min(W - 1, Math.round(sx)));
     if ((zBuffer[col] || Infinity) < dist - 0.2) return;
 
@@ -3516,10 +4006,11 @@ isCutscenePaused = false;
   }
 
   function drawGunSprite(cx, cy, S) {
+    if (!isFinite(S) || S <= 0) return;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.shadowColor = "#7fb8ff";
-    ctx.shadowBlur = S * 0.30;
+    ctx.shadowBlur = Math.max(0, S * 0.30);
     ctx.fillStyle = "#dbe4ee";
     ctx.beginPath();
     ctx.moveTo(-S * 0.55, -S * 0.22);
@@ -3663,6 +4154,7 @@ isCutscenePaused = false;
     ctx.restore();
   }
 
+  // ============ 小地图 ============
   function drawMinimapCells(x0, y0, cell) {
     if (currentRole === "marshal") {
       for (let y = 0; y < MAP_H; y++) {
@@ -4048,28 +4540,37 @@ isCutscenePaused = false;
     }
   }
 
+  // ★ 关键修复：整帧循环加 try/catch 防护，避免任何一处异常导致整个游戏卡死
   function frame(now) {
     const dt = Math.min(MAX_DT, (now - lastTime) / 1000);
     lastTime = now;
 
-    if (state === "playing") {
-      if (isCutscenePaused) {
-        // 剧情暂停：把时间往后推，避免算进本局时长
-        gameStartTime += dt * 1000;
-        // 保持画面静止渲染
-        renderWorld();
+    try {
+      if (state === "playing") {
+        if (isCutscenePaused || (window.HeroIntro && typeof window.HeroIntro.isRunning === "function" && window.HeroIntro.isRunning())) {
+          gameStartTime += dt * 1000;
+          renderWorld();
+        } else {
+          updatePlayer(dt);
+          updateAtmosphere(dt);
+          updateFireSound();
+          updateBreathSound(dt);
+          updateBatHum();
+          checkProgressStory();
+          checkMemoryFlash(dt);
+          if (state === "playing") updateEnemies(dt);
+          updateScares(dt);
+          updateBlood(dt);
+          updateCasings(dt);
+          updateExploration(dt);
+          renderWorld();
+        }
       } else {
-        updatePlayer(dt);
-        checkFragmentPickup();
-        if (state === "playing") updateEnemies(dt);
-        updateScares(dt);
-        updateBlood(dt);
-        updateCasings(dt);
-        updateExploration(dt);
-        renderWorld();
+        renderIdle();
       }
-    } else {
-      renderIdle();
+    } catch (err) {
+      console.error("[frame error]", err);
+      // 继续下一帧，不让游戏彻底卡死
     }
     requestAnimationFrame(frame);
   }
@@ -4236,7 +4737,7 @@ isCutscenePaused = false;
       hud.classList.remove("is-visible");
       crosshair.classList.remove("is-visible");
       mobileControls.classList.remove("is-visible");
-      if (fragmentCounter) fragmentCounter.hidden = true;
+      document.body.classList.remove("is-playing");
       multiplayer = false;
       showScreen(menu);
     }
@@ -4437,6 +4938,23 @@ isCutscenePaused = false;
     });
   }
 
+  for (const btn of document.querySelectorAll("[data-role]")) {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.role;
+      if (key !== "escaper" && key !== "marshal") return;
+      multiplayer = false;
+      isDailyChallenge = false;
+      currentRole = key;
+      for (const b of document.querySelectorAll("[data-role]")) {
+        b.setAttribute("aria-checked", b === btn ? "true" : "false");
+      }
+      if (key === "marshal") {
+        currentDifficulty = "easy";
+        startGame();
+      }
+    });
+  }
+
   for (const btn of document.querySelectorAll("[data-difficulty]")) {
     btn.addEventListener("click", () => {
       const key = btn.dataset.difficulty;
@@ -4444,7 +4962,6 @@ isCutscenePaused = false;
       multiplayer = false;
       isDailyChallenge = false;
 
-      // ★ 修复：难度按钮只对逃离者模式有意义，强制切回逃离者
       if (currentRole !== "escaper") {
         currentRole = "escaper";
         for (const b of document.querySelectorAll("[data-role]")) {
@@ -4469,7 +4986,7 @@ isCutscenePaused = false;
       const diary = Lore.getDailyDiary(dailyDay);
       dailyInfo.innerHTML =
         `今日种子：<strong>${dailySeed}</strong><br>` +
-        `<span style="color:#8d6a45">${diary.title}</span>`;
+        `<span style="color:#8d6a45">${diary ? diary.title : ""}</span>`;
     } else {
       dailyInfo.innerHTML = `今日种子：<strong>${dailySeed}</strong>`;
     }
@@ -4488,7 +5005,7 @@ isCutscenePaused = false;
   }
 
   function startDailyChallenge(mode) {
-    if (window.Account && !Account.isLoggedIn()) {
+    if (window.Account && Account.isLoggedIn && !Account.isLoggedIn()) {
       openAuthModal(() => beginDailyRun(mode));
       return;
     }
@@ -4519,16 +5036,33 @@ isCutscenePaused = false;
     });
   }
 
+  if (replayIntroBtn) {
+    replayIntroBtn.addEventListener("click", () => {
+      if (!window.HeroIntro) return;
+      menu.classList.remove("is-visible");
+      if (topBar) topBar.style.display = "none";
+      try {
+        window.HeroIntro.play(() => {
+          menu.classList.add("is-visible");
+          if (topBar) topBar.style.display = "";
+        });
+      } catch (e) {
+        menu.classList.add("is-visible");
+        if (topBar) topBar.style.display = "";
+      }
+    });
+  }
+
   let authMode = "login";
   let authCallback = null;
 
   function refreshAccountUI() {
     if (!accountLabel) return;
-    accountLabel.textContent = (window.Account && Account.isLoggedIn())
+    accountLabel.textContent = (window.Account && Account.isLoggedIn && Account.isLoggedIn())
       ? Account.getUsername()
       : "登录 / 注册";
     if (authLogoutBtn) {
-      authLogoutBtn.style.display = (window.Account && Account.isLoggedIn()) ? "inline-block" : "none";
+      authLogoutBtn.style.display = (window.Account && Account.isLoggedIn && Account.isLoggedIn()) ? "inline-block" : "none";
     }
   }
 
@@ -4608,6 +5142,13 @@ isCutscenePaused = false;
     });
   }
 
+  const resultLbBtn = document.getElementById("result-lb-btn");
+  if (resultLbBtn) {
+    resultLbBtn.addEventListener("click", () => {
+      openLeaderboard();
+    });
+  }
+
   restartButton.addEventListener("click", () => {
     isDailyChallenge = false;
     if (topBar) topBar.style.display = "";
@@ -4617,7 +5158,6 @@ isCutscenePaused = false;
       showScreen(menu);
       return;
     }
-    // ★ 修复：确保重开时使用正确的角色（避免残留 marshal 状态）
     const roleBtns = document.querySelectorAll("[data-role]");
     let chosenRole = "escaper";
     for (const b of roleBtns) {
@@ -4633,5 +5173,6 @@ isCutscenePaused = false;
   resizeCanvas();
   renderIdle();
   buildWallTextures();
+  initPetals();
   requestAnimationFrame(frame);
 })();
