@@ -1722,6 +1722,126 @@ isCutscenePaused = false;
   function hideMessage() { message.classList.remove("is-visible"); }
 
   // ============================ v2.2: 剧情系统 ============================
+  // ============================ v2.3: 剧情音频系统 ============================
+  const LoreAudio = (() => {
+    const base = "assets/audio/lore/";
+    const cache = new Map();
+    let currentAudio = null;
+
+    function getPath(name, isMarshal) {
+      const dir = isMarshal ? "marshal/" : "female/";
+      return base + dir + name + ".wav";
+    }
+
+    function play(name, isMarshal) {
+      const path = getPath(name, isMarshal);
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+      }
+      let audio = cache.get(path);
+      if (!audio) {
+        audio = new Audio(path);
+        cache.set(path, audio);
+      }
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      currentAudio = audio;
+    }
+
+    function stop() {
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+      }
+    }
+
+    // 根据文本内容找对应的音频文件名
+    function findName(text, isMarshal) {
+      if (!text) return null;
+      const dir = isMarshal ? "marshal" : "female";
+      // 精确匹配表
+      const table = {
+        // 少帅视角
+        "他又醒了。他又要跑。": "intro_marshal_01",
+        "我认得这条路——是我当年走过的。": "intro_marshal_02",
+        "他以为他能跑掉。": "intro_marshal_03",
+        "可他忘了：我就是他。": "intro_marshal_04",
+        "他藏进铁笼，我就站外面。": "intro_marshal_05",
+        "站一整夜。像当年一样。": "intro_marshal_06",
+        "他也捡到枪了。": "pickup_gun_marshal_01",
+        "他以为能挡住我？": "pickup_gun_marshal_02",
+        "他连自己都挡不住。": "pickup_gun_marshal_03",
+        "那把小刀……": "pickup_knife_marshal_01",
+        "是我当年藏起来的。": "pickup_knife_marshal_02",
+        "他拿走了。他还记得她。": "pickup_knife_marshal_03",
+        "他还在笑。": "wall_marshal_01",
+        "他为什么还在笑？": "wall_marshal_02",
+        "火里那个人也是这么笑的。": "wall_marshal_03",
+        "别笑了……求你了。": "wall_marshal_04",
+        "是我害了他。": "wall_marshal_05",
+        "我不配看那张脸。": "wall_marshal_06",
+        "他在里面数数。": "countdown_marshal_01",
+        "他每次都数。": "countdown_marshal_02",
+        "他知道我在外面。": "countdown_marshal_03",
+        "他不想看我。": "countdown_marshal_04",
+        "他恨我。": "countdown_marshal_05",
+        "我也恨我自己。": "countdown_marshal_06",
+        // 女性视角
+        "又是这里。又是这个院子。": "intro_escaper_01",
+        "他在追我。他一直都在追我。": "intro_escaper_02",
+        "我不能停下。小洛让我活下去。": "intro_escaper_03",
+        "找到枪，找到刀，把那扇锁关上。": "intro_escaper_04",
+        "只要我进了铁笼，他就进不来。": "intro_escaper_05",
+        "撑过 30 秒。天亮了就好。": "intro_escaper_06",
+        "一把枪……我不太会用。": "pickup_gun_escaper_01",
+        "但如果他也有怕的东西……": "pickup_gun_escaper_02",
+        "也许他就能停下来。": "pickup_gun_escaper_03",
+        "小洛的刀。她削苹果的姿势很好看。": "pickup_knife_escaper_01",
+        "我不是要开锁。": "pickup_knife_escaper_02",
+        "我要把那扇门，关死。": "pickup_knife_escaper_03",
+        "那是他……": "wall_escaper_01",
+        "不，那是……我？": "wall_escaper_02",
+        "别看他的眼睛。": "wall_escaper_03",
+        "别变成他。": "wall_escaper_04",
+        "小洛，帮帮我。": "wall_escaper_05",
+        "我不想变成那个东西。": "wall_escaper_06",
+        "1 秒……2 秒……": "countdown_escaper_01",
+        "像那年火里一样。": "countdown_escaper_02",
+        "小洛说，撑过去就好。": "countdown_escaper_03",
+        "他在敲铁笼。别理他。": "countdown_escaper_04",
+        "快到了，快到了。": "countdown_escaper_05",
+        "天快亮了。": "countdown_escaper_06",
+        // DIARY
+        "小洛发烧了。我把她放进铁笼里，因为那是最安全的地方。锁是我亲手扣上的，我说，等哥哥回来。": "diary_01",
+        "我回来的时候，院子在烧。钥匙掉了。我掰那根锁，手指头全断了。小洛在里面，隔着栏杆看我，她还在笑。她说，哥哥，不要怕。": "diary_02",
+        "\"哥哥，你要活下去。\" —— 那是她最后一句话。": "diary_03",
+        "我不知道我是怎么活下来的。有时候我觉得，那个从火里爬出来的人不是我。是一个更坏的东西。": "diary_04",
+        "他每天晚上都来找我。他长得和我一模一样，但眼睛里全是灰。他说，我们一起下地狱吧。我说不。他就一直追。": "diary_05",
+        "我又见到那个铁笼了。还在那儿。我每天做梦都想再进去一次——不是去找她，而是去把那扇门，好好关上。": "diary_06",
+        "小洛有一把小刀，削苹果用的。我把它藏了很久。现在我想把它插进那扇锁里——不是为了打开，是为了关死。": "diary_07",
+        "有把枪。我不太会用。但每次听见他的脚步声，我都会想：如果我也有他要的东西，他是不是就能停下来了。": "diary_08",
+        "锁转动的声音，像当年火里那样。我数着——一秒，两秒……小洛说过，撑过去就好。": "diary_09",
+        "如果我进了铁笼，他只能站在外面。一整夜。他不会离开，但他也进不来。这样就好。": "diary_10",
+        // FRAGMENTS
+        "院子最里头有一棵槐树。小洛在树下睡午觉，头发上落满了花。": "fragment_01",
+        "她怕黑。所以我把铁笼里的灯留着，一直留着。": "fragment_02",
+        "她学写字，第一个会写的字是「哥」。": "fragment_03",
+        "她生日那天想要一把刀。我没买。现在想想，买就好了。": "fragment_04",
+        "火起来的时候，我在两条街外。我跑回来了。我跑得很快。": "fragment_05",
+        "后来警察问我，钥匙呢。我说丢了。其实它一直在我口袋里。": "fragment_06",
+        "我不敢看铁笼。可我又每天都想回去看。": "fragment_07",
+        "小洛最喜欢的歌，是一首很老的童谣。我不敢听。": "fragment_08",
+        "我对医生说，我没事。他说你分裂了。我说那正好，一半的我还在陪她。": "fragment_09",
+        "如果人生能重来，我还是会锁那扇门。但我会先把钥匙吞下去。": "fragment_10",
+      };
+      return table[text] || null;
+    }
+
+    return { play, stop, findName };
+  })();
+
   function showCutscene(title, text, duration = 3000) {
     if (!cutscene) return;
     cutsceneTitle.textContent = title || "";
@@ -1736,6 +1856,10 @@ isCutscenePaused = false;
       cutscene.classList.remove("is-visible");
       isCutscenePaused = false;
     }, duration);
+    // v2.3: 同步播放剧情音频
+    const isMarshal = isMarshalView();
+    const name = LoreAudio.findName(text, isMarshal);
+    if (name) LoreAudio.play(name, isMarshal);
   }
 
   function showSubtitle(text, duration = 2600) {
@@ -1746,6 +1870,10 @@ isCutscenePaused = false;
     subtitleTimer = window.setTimeout(() => {
       subtitle.classList.remove("is-visible");
     }, duration);
+    // v2.3: 同步播放剧情音频
+    const isMarshal = isMarshalView();
+    const name = LoreAudio.findName(text, isMarshal);
+    if (name) LoreAudio.play(name, isMarshal);
   }
 
   function hideSubtitle() {
