@@ -244,6 +244,7 @@
   let countdownVoiceTimer = 0;
   let countdownVoiceIndex = 0;
   let wallVoiceCooldown = 0;
+  let isCutscenePaused = false;
 
   function getDailySeed(dateStr) {
     let h = 2166136261;
@@ -1611,7 +1612,8 @@
     if (topBar) topBar.style.display = "";
     if (fragmentCounter) fragmentCounter.hidden = true;
     if (cutscene) cutscene.classList.remove("is-visible");
-    hideSubtitle();
+hideSubtitle();
+isCutscenePaused = false;
     triggerHeld = false;
     autoFiring = false;
     isReloading = false;
@@ -1725,9 +1727,14 @@
     cutsceneTitle.textContent = title || "";
     cutsceneText.textContent = text || "";
     cutscene.classList.add("is-visible");
+
+    // 剧情期间暂停游戏
+    isCutscenePaused = true;
+
     window.clearTimeout(cutsceneTimer);
     cutsceneTimer = window.setTimeout(() => {
       cutscene.classList.remove("is-visible");
+      isCutscenePaused = false;
     }, duration);
   }
 
@@ -3916,15 +3923,23 @@
   function frame(now) {
     const dt = Math.min(MAX_DT, (now - lastTime) / 1000);
     lastTime = now;
+
     if (state === "playing") {
-      updatePlayer(dt);
-      checkFragmentPickup();
-      if (state === "playing") updateEnemies(dt);
-      updateScares(dt);
-      updateBlood(dt);
-      updateCasings(dt);
-      updateExploration(dt);
-      renderWorld();
+      if (isCutscenePaused) {
+        // 剧情暂停：把时间往后推，避免算进本局时长
+        gameStartTime += dt * 1000;
+        // 保持画面静止渲染
+        renderWorld();
+      } else {
+        updatePlayer(dt);
+        checkFragmentPickup();
+        if (state === "playing") updateEnemies(dt);
+        updateScares(dt);
+        updateBlood(dt);
+        updateCasings(dt);
+        updateExploration(dt);
+        renderWorld();
+      }
     } else {
       renderIdle();
     }
@@ -4294,36 +4309,27 @@
     });
   }
 
-  for (const btn of document.querySelectorAll("[data-role]")) {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.role;
-      if (key !== "escaper" && key !== "marshal") return;
-      multiplayer = false;
-      isDailyChallenge = false;
-      currentRole = key;
-      for (const b of document.querySelectorAll("[data-role]")) {
-        b.setAttribute("aria-checked", b === btn ? "true" : "false");
-      }
-      if (key === "marshal") {
-        currentDifficulty = "easy";
-        startGame();
-      }
-    });
-  }
-
   for (const btn of document.querySelectorAll("[data-difficulty]")) {
     btn.addEventListener("click", () => {
       const key = btn.dataset.difficulty;
       if (!DIFFICULTIES[key]) return;
       multiplayer = false;
       isDailyChallenge = false;
+
+      // ★ 修复：难度按钮只对逃离者模式有意义，强制切回逃离者
+      if (currentRole !== "escaper") {
+        currentRole = "escaper";
+        for (const b of document.querySelectorAll("[data-role]")) {
+          b.setAttribute("aria-checked", b.dataset.role === "escaper" ? "true" : "false");
+        }
+      }
+
       currentDifficulty = key;
       for (const b of document.querySelectorAll("[data-difficulty]")) {
         b.setAttribute("aria-checked", b === btn ? "true" : "false");
       }
-      if (currentRole === "escaper") {
-        startGame();
-      }
+
+      startGame();
     });
   }
 
@@ -4483,6 +4489,16 @@
       showScreen(menu);
       return;
     }
+    // ★ 修复：确保重开时使用正确的角色（避免残留 marshal 状态）
+    const roleBtns = document.querySelectorAll("[data-role]");
+    let chosenRole = "escaper";
+    for (const b of roleBtns) {
+      if (b.getAttribute("aria-checked") === "true") {
+        chosenRole = b.dataset.role === "marshal" ? "marshal" : "escaper";
+        break;
+      }
+    }
+    currentRole = chosenRole;
     startGame();
   });
 
