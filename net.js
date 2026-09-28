@@ -49,6 +49,11 @@ window.Net = (() => {
 
   function setupConn(c) {
     conn = c;
+    // joiner 在 c.on("open") 回调里调用 setupConn 时，open 事件已经发射过
+    if (c.open) {
+      connectedFlag = true;
+      emit("open");
+    }
     conn.on("open", () => { connectedFlag = true; emit("open"); });
     conn.on("data", (data) => {
       if (data && typeof data === "object" && typeof data.t === "string") {
