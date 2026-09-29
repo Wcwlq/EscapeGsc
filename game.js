@@ -1721,7 +1721,7 @@
         seedEscaperTrail(player.x, player.y, 1);
       }
 
-      graceTimer = 0;
+      graceTimer = localRole === "escaper" ? START_GRACE_DURATION : 0;
       playerFrozenTimer = 0;
       escapeGraceTimer = 0;
 
@@ -2753,6 +2753,8 @@
 
   function updateMultiplayerEnemies(dt) {
     const preset = currentPreset();
+    const startProtected = localRole === "escaper" && graceTimer > 0;
+    if (startProtected) graceTimer = Math.max(0, graceTimer - dt);
     const remote = enemies.find(e => e.isRemote);
     if (!remote) return;
 
@@ -2778,7 +2780,7 @@
         Net.send("trail", { gx, gy });
       }
 
-      if (!gameEnded && remotePlayer.ready && d < 0.5) {
+      if (!gameEnded && remotePlayer.ready && d < 0.5 && !startProtected) {
         gameEnded = true;
         Net.send("end", { escaperWon: false });
         endGame(false);
@@ -2810,7 +2812,9 @@
         }
       }
 
-      if (d < 4) {
+      if (startProtected) {
+        statusText.textContent = `无敌 ${graceTimer.toFixed(1)}s · 快跑！`;
+      } else if (d < 4) {
         statusText.textContent = `少帅就在附近（${d.toFixed(1)} 格）`;
       } else if (lockState === "inserted") {
         statusText.textContent = "锁在绞动…";
