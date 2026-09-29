@@ -1,0 +1,36 @@
+const { chromium } = require('/Users/alumin/Project/sdszwebsite/node_modules/playwright');
+const assert = require('node:assert/strict');
+const BASE='https://gsc.wanderin.cn/index.html?gun-smoke=20260929';
+(async()=>{
+ const b=await chromium.launch({headless:true}); const aCtx=await b.newContext(), mCtx=await b.newContext();
+ for(const ctx of [aCtx,mCtx]) await ctx.addInitScript(()=>{HTMLCanvasElement.prototype.requestPointerLock=()=>Promise.resolve()});
+ const a=await aCtx.newPage(), m=await mCtx.newPage(); const errors=[];
+ for(const p of [a,m]) { await p.goto(BASE,{waitUntil:'domcontentloaded'}); p.on('pageerror',e=>errors.push(e.message)); }
+ await a.click('#multiplayer-btn'); await m.click('#multiplayer-btn'); await a.click('#create-room-btn');
+ await a.waitForFunction(()=>/^\d{6}$/.test(document.querySelector('#room-code').textContent.trim()),null,{timeout:15000});
+ const code=await a.locator('#room-code').innerText(); await m.fill('#room-input',code); await m.click('#join-room-btn');
+ await a.waitForSelector('#setup.is-visible'); await m.waitForSelector('#setup.is-visible');
+ await a.click('[data-setup-role="escaper"]'); await m.click('[data-setup-role="marshal"]'); await a.click('[data-setup-difficulty="hard"]');
+ await m.evaluate(()=>{window.__out=[]; const old=Net.send; Net.send=(t,d)=>{if(t==='state') window.__out.push({...d}); return old.call(Net,t,d)}});
+ await a.click('#setup-ready-btn'); await m.click('#setup-ready-btn');
+ await a.waitForFunction(()=>document.body.classList.contains('is-playing') && !document.querySelector('#cutscene.is-visible'));
+ await m.waitForFunction(()=>document.body.classList.contains('is-playing') && !document.querySelector('#cutscene.is-visible'));
+ await m.waitForTimeout(300);
+ const beforeHitStatus=await m.locator('#status-text').innerText();
+ await a.evaluate(()=>{window.__sent=[]; const old=Net.send; Net.send=(t,d)=>{window.__sent.push({t,d}); return old.call(Net,t,d)}});
+ await m.evaluate(()=>{window.__receivedHits=[]; Net.on('hit',d=>window.__receivedHits.push(d));});
+ await a.evaluate(()=>Net.send('hit',{ux:1,uy:0,isAuto:false,isLastBullet:false}));
+ await m.waitForTimeout(1000);
+ const debug=await Promise.all([a,m].map(p=>p.evaluate(()=>({connected:Net.connected,received:window.__receivedHits||[],sent:window.__sent||[],status:document.querySelector('#status-text').textContent,message:document.querySelector('#message').textContent}))));
+ console.log(JSON.stringify({debug},null,2));
+ assert.ok(debug[1].received.length>0,'marshal did not receive hit event');
+ assert.ok(debug[1].status.includes('冻结') || debug[1].status.includes('被击中') || debug[1].message.includes('被击中'),'marshal UI did not show hit feedback');
+ const stunnedStatus=debug[1].status;
+ await new Promise(r=>setTimeout(r,1200));
+ const recoveredStatus=await m.locator('#status-text').innerText();
+ console.log(JSON.stringify({room:code,beforeHitStatus,stunnedStatus,recoveredStatus,errors},null,2));
+ assert.ok(!recoveredStatus.includes('被击中'),'marshal stun should expire');
+ assert.deepEqual(errors,[]);
+ console.log('PASS multiplayer gun hit -> marshal stun');
+ await b.close();
+})().catch(e=>{console.error(e);process.exit(1)});

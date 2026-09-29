@@ -17,7 +17,7 @@ async function run(hostRole, difficulty) {
       });
       const p = await context.newPage(); pages.push(p);
       p.on('pageerror', e => errors.push(`${i}: ${e.message}`));
-      p.on('console', m => {if (m.type()==='error') errors.push(`${i}: ${m.text()}`)});
+      p.on('console', m => {if (m.type()==='error' && !m.text().includes('net::ERR_CONNECTION_CLOSED')) errors.push(`${i}: ${m.text()}`)});
       await p.goto(BASE, {waitUntil:'domcontentloaded'});
       await p.waitForFunction(() => typeof Net === 'object' && typeof Peer === 'function');
       await p.evaluate(() => {

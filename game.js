@@ -167,6 +167,7 @@
   let wallNearbyPan = 0;
 
   let playerFrozenTimer = 0;
+  let playerStunTimer = 0;
   let escapeGraceTimer = 0;
 
   let escaperVisitedGun = false;
@@ -1678,6 +1679,7 @@
 
     escaperTrail.clear();
     playerFrozenTimer = 0;
+    playerStunTimer = 0;
     escapeGraceTimer = 0;
     wallNearbyBurst = 0;
     wallNearbyPan = 0;
@@ -1723,7 +1725,7 @@
       }
 
       graceTimer = localRole === "escaper" ? START_GRACE_DURATION : 0;
-      playerFrozenTimer = 0;
+      playerFrozenTimer = localRole === "marshal" ? START_GRACE_DURATION : 0;
       escapeGraceTimer = 0;
 
       if (localRole === "escaper") {
@@ -2385,10 +2387,18 @@
           if (d < bestDist) { bestDist = d; best = e; }
         }
       }
-      if (best && !best.isRemote) {
+      if (best) {
         const dx = best.x - player.x, dy = best.y - player.y;
         const d = Math.hypot(dx, dy);
-        hitEnemy(best, dx / d, dy / d, isAuto, isLastBullet);
+        if (best.isRemote && multiplayer) {
+          Net.send("hit", { ux: dx / d, uy: dy / d, isAuto, isLastBullet });
+          hitConfirmTimer = 0.28;
+          whiteFlash = Math.max(whiteFlash, 0.75);
+          playFleshHit();
+          showMessage(isLastBullet ? `最后一发命中！少帅眩晕 ${LAST_BULLET_STUN.toFixed(1)}s` : "击中了少帅！", 1200);
+        } else if (!best.isRemote) {
+          hitEnemy(best, dx / d, dy / d, isAuto, isLastBullet);
+        }
       }
     } else {
       shake = Math.max(shake, 2.4);
@@ -2397,6 +2407,18 @@
     }
 
     return true;
+  }
+
+  function applyMultiplayerHit(msg) {
+    if (!multiplayer || localRole !== "marshal" || state !== "playing") return;
+    const isLastBullet = Boolean(msg && msg.isLastBullet);
+    const duration = isLastBullet ? LAST_BULLET_STUN : 1.0;
+    playerStunTimer = Math.max(playerStunTimer, duration);
+    hitConfirmTimer = 0.28;
+    whiteFlash = Math.max(whiteFlash, 0.75);
+    rageFlash = Math.max(rageFlash, 0.45);
+    playFleshHit();
+    showMessage(isLastBullet ? `被最后一发击中！眩晕 ${LAST_BULLET_STUN.toFixed(1)}s` : "被击中了！眩晕 1.0s", 1200);
   }
 
   function hitEnemy(e, ux, uy, isAuto, isLastBullet) {
@@ -2754,6 +2776,8 @@
 
   function updateMultiplayerEnemies(dt) {
     const preset = currentPreset();
+    if (playerFrozenTimer > 0) playerFrozenTimer = Math.max(0, playerFrozenTimer - dt);
+    if (playerStunTimer > 0) playerStunTimer = Math.max(0, playerStunTimer - dt);
     const startProtected = localRole === "escaper" && graceTimer > 0;
     if (startProtected) graceTimer = Math.max(0, graceTimer - dt);
     const remote = enemies.find(e => e.isRemote);
@@ -2832,7 +2856,11 @@
       shake = Math.max(0, (2.45 - d) * 1.35);
     } else {
       const detectRange = preset.detectRange;
-      if (detectRange > 0 && remotePlayer.ready && d < detectRange) {
+      if (playerFrozenTimer > 0) {
+        statusText.textContent = `冻结 ${playerFrozenTimer.toFixed(1)}s · 逃离者正在逃跑`;
+      } else if (playerStunTimer > 0) {
+        statusText.textContent = `被击中 · 眩晕 ${playerStunTimer.toFixed(1)}s`;
+      } else if (detectRange > 0 && remotePlayer.ready && d < detectRange) {
         statusText.textContent = `逃离者就在附近（${d.toFixed(1)} 格）`;
       } else {
         statusText.textContent = lockState === "inserted" ? "锁在绞动…" : "逃离者正在逃跑";
@@ -2954,7 +2982,14 @@
 
     updateReload(dt);
 
-    if (currentRole === "marshal" && playerFrozenTimer > 0 && !multiplayer) {
+    if (currentRole === "marshal" && (playerFrozenTimer > 0 || playerStunTimer > 0)) {
+      if (multiplayer) {
+        netSendTimer -= dt;
+        if (netSendTimer <= 0) {
+          netSendTimer = 1 / 30;
+          Net.send("state", { x: player.x, y: player.y, a: player.angle });
+        }
+      }
       return;
     }
 
@@ -4760,6 +4795,10 @@
     remotePlayer.y = msg.y;
     remotePlayer.angle = msg.a;
     remotePlayer.ready = true;
+  });
+
+  Net.on("hit", (msg) => {
+    applyMultiplayerHit(msg || {});
   });
 
   Net.on("trail", (msg) => {
