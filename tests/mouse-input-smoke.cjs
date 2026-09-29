@@ -1,0 +1,31 @@
+const { chromium } = require('/Users/alumin/Project/sdszwebsite/node_modules/playwright');
+const BASE='https://gsc.wanderin.cn/index.html?mouse-spike=20260929';
+(async()=>{
+ const b=await chromium.launch({headless:true}); const aCtx=await b.newContext(), cCtx=await b.newContext();
+ for(const ctx of [aCtx,cCtx]) await ctx.addInitScript(()=>{HTMLCanvasElement.prototype.requestPointerLock=()=>Promise.resolve()});
+ const a=await aCtx.newPage(), c=await cCtx.newPage();
+ for(const p of [a,c]) await p.goto(BASE,{waitUntil:'domcontentloaded'});
+ await a.waitForTimeout(1500); await c.waitForTimeout(1500);
+ await a.click('#multiplayer-btn'); await c.click('#multiplayer-btn'); await a.click('#create-room-btn');
+ await a.waitForFunction(()=>/^\d{6}$/.test(document.querySelector('#room-code').textContent.trim()),null,{timeout:15000});
+ const code=await a.locator('#room-code').innerText(); await c.fill('#room-input',code); await c.click('#join-room-btn');
+ await a.waitForSelector('#setup.is-visible'); await c.waitForSelector('#setup.is-visible');
+ await a.click('[data-setup-role="escaper"]'); await c.click('[data-setup-role="marshal"]'); await a.click('[data-setup-difficulty="hard"]');
+ await c.evaluate(()=>{
+   window.__states=[]; const old=Net.send; Net.send=(t,d)=>{if(t==='state') window.__states.push({...d}); return old.call(Net,t,d)};
+   Object.defineProperty(document,'pointerLockElement',{configurable:true,get:()=>document.querySelector('#game')});
+ });
+ await a.click('#setup-ready-btn'); await c.click('#setup-ready-btn');
+ await a.waitForFunction(()=>document.body.classList.contains('is-playing') && !document.querySelector('#cutscene.is-visible')); await c.waitForFunction(()=>document.body.classList.contains('is-playing') && !document.querySelector('#cutscene.is-visible'));
+ await c.waitForTimeout(300);
+ const before=await c.evaluate(()=>window.__states.at(-1));
+ await c.evaluate(()=>{const e=new MouseEvent('mousemove',{bubbles:true}); Object.defineProperty(e,'movementX',{value:100000}); Object.defineProperty(e,'movementY',{value:0}); document.dispatchEvent(e);});
+ await c.waitForTimeout(100);
+ const after=await c.evaluate(()=>window.__states.at(-1));
+ await c.evaluate(()=>{const e=new MouseEvent('mousemove',{bubbles:true}); Object.defineProperty(e,'movementX',{value:100}); Object.defineProperty(e,'movementY',{value:0}); document.dispatchEvent(e);});
+ await c.waitForTimeout(100);
+ const afterNormal=await c.evaluate(()=>window.__states.at(-1));
+ console.log(JSON.stringify({room:code,before,after,afterNormal,spikeDelta:before&&after&&after.a-before.a,normalDelta:after&&afterNormal&&afterNormal.a-after.a},null,2));
+ if (!before || !after || !afterNormal || Math.abs(after.a-before.a) > 0.5 || Math.abs(afterNormal.a-after.a) < 0.05 || Math.abs(afterNormal.a-after.a) > 0.2) throw new Error('mouse delta guard regression');
+ await b.close();
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -71,6 +71,7 @@
   const RUN_SPEED = 2.85;
   const ROTATE_SPEED = 1.75;
   const BASE_MOUSE_SENS = 0.0011;
+  const MAX_MOUSE_DELTA = 160; // 丢弃 Pointer Lock/驱动异常产生的单帧尖峰
   const PITCH_SENSITIVITY = 0.0010;
   const PITCH_LIMIT = 0.55;
   const LOCK_DURATION = 30;
@@ -4613,11 +4614,17 @@
 
   document.addEventListener("mousemove", (e) => {
     if (state === "playing" && document.pointerLockElement === canvas) {
-      if (Math.abs(e.movementY) > 0.5) lastMouseMoveTime = performance.now();
+      const dx = Number(e.movementX);
+      const dy = Number(e.movementY);
+      if (!Number.isFinite(dx) || !Number.isFinite(dy) ||
+          Math.abs(dx) > MAX_MOUSE_DELTA || Math.abs(dy) > MAX_MOUSE_DELTA) {
+        return;
+      }
+      if (Math.abs(dy) > 0.5) lastMouseMoveTime = performance.now();
       if (currentRole === "marshal" && playerFrozenTimer > 0 && !multiplayer) return;
-      player.angle = normalizeAngle(player.angle + e.movementX * BASE_MOUSE_SENS * sensitivityMult);
+      player.angle = normalizeAngle(player.angle + dx * BASE_MOUSE_SENS * sensitivityMult);
       player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
-        player.pitch + e.movementY * PITCH_SENSITIVITY * sensitivityMult));
+        player.pitch + dy * PITCH_SENSITIVITY * sensitivityMult));
     }
   });
 
